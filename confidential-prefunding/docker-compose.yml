@@ -1,0 +1,141 @@
+name: confidential-prefunding
+
+services:
+  anchor-platform:
+    image: stellar/anchor-platform:latest
+    platform: linux/amd64
+    command: --sep-server --platform-server --event-processor --stellar-observer
+    env_file:
+      - ./.env
+    environment:
+      STELLAR_NETWORK_TYPE: rpc
+      STELLAR_NETWORK_RPC_URL: ${STELLAR_RPC_URL}
+      SECRET_DATA_USERNAME: ${ANCHOR_DB_USER}
+      SECRET_DATA_PASSWORD: ${ANCHOR_DB_PASSWORD}
+      SECRET_SEP10_SIGNING_SEED: ${HOST_SEP10_SECRET_KEY}
+      APP_LOGGING_STELLAR_LEVEL: INFO
+      APP_LOGGING_REQUEST_LOGGER_ENABLED: "true"
+      EVENTS_ENABLED: "true"
+      EVENTS_QUEUE_TYPE: kafka
+      EVENTS_QUEUE_KAFKA_BOOTSTRAP_SERVER: kafka:29092
+      EVENT_PROCESSOR_CALLBACK_API_REQUEST_ENABLED: "true"
+      CALLBACK_API_BASE_URL: http://business-server:${BUSINESS_SERVER_PORT}/
+      PLATFORM_API_BASE_URL: http://anchor-platform:8085
+      DATA_TYPE: postgres
+      DATA_SERVER: anchor-db:5432
+      DATA_DATABASE: ${ANCHOR_DB_NAME}
+      DATA_SCHEMA: anchor_platform
+      DATA_FLYWAY_ENABLED: "true"
+      ASSETS_TYPE: file
+      ASSETS_VALUE: /config/assets.yaml
+      SEP1_ENABLED: "true"
+      SEP1_TOML_TYPE: file
+      SEP1_TOML_VALUE: /config/stellar.localhost.toml
+      SEP10_ENABLED: "true"
+      SEP10_WEB_AUTH_DOMAIN: localhost:8080
+      SEP10_HOME_DOMAINS: localhost:8080
+      SEP12_ENABLED: "true"
+      SEP6_ENABLED: "true"
+      SEP6_MORE_INFO_URL_BASE_URL: http://localhost:8091/sep6/transaction/more_info
+      SEP24_ENABLED: "true"
+      SEP24_INTERACTIVE_URL_BASE_URL: http://localhost:8091/sep24/interactive
+      SEP24_MORE_INFO_URL_BASE_URL: http://localhost:8091/sep24/transaction/more_info
+      SEP31_ENABLED: "true"
+      SEP38_ENABLED: "true"
+      SEP45_ENABLED: "false"
+    volumes:
+      - ./infra/anchor-platform/config:/config:ro
+    ports:
+      - "${ANCHOR_SEP_PORT}:8080"
+      - "${ANCHOR_PLATFORM_API_PORT}:8085"
+    depends_on:
+      - anchor-db
+      - kafka
+      - business-server
+
+  anchor-db:
+    image: postgres:15.2-alpine
+    environment:
+      POSTGRES_USER: ${ANCHOR_DB_USER}
+      POSTGRES_PASSWORD: ${ANCHOR_DB_PASSWORD}
+      POSTGRES_DB: ${ANCHOR_DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - anchor-db-data:/var/lib/postgresql/data
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.3
+    platform: linux/amd64
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29096
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      CLUSTER_ID: ciWo7IWazngRchmPES6q5A==
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29096
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    ports:
+      - "29092:29092"
+      - "29096:29096"
+
+  business-server:
+    build:
+      context: .
+      dockerfile: infra/docker/node-service.Dockerfile
+    env_file:
+      - ./.env
+    command: ["node", "backend/anchor-business-server/src/index.mjs"]
+    ports:
+      - "${BUSINESS_SERVER_PORT}:8091"
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/node-service.Dockerfile
+    env_file:
+      - ./.env
+    environment:
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL}
+    command: ["node", "backend/src/index.mjs"]
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "${API_PORT}:3001"
+    depends_on:
+      - business-server
+
+  prover-worker:
+    build:
+      context: .
+      dockerfile: infra/docker/node-service.Dockerfile
+    env_file:
+      - ./.env
+    command: ["node", "backend/src/worker.mjs"]
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - api
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/docker/node-service.Dockerfile
+    env_file:
+      - ./.env
+    command: ["node", "frontend/server.mjs"]
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    depends_on:
+      - api
+
+volumes:
+  anchor-db-data:

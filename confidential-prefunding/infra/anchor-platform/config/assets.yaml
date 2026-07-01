@@ -1,0 +1,59 @@
+items:
+  - id: stellar:native
+    distribution_account: GDACYZGYILKBNULHQRT5E5262TLKSCT5BWBOEWKVEWAIS4M2KUNDUADJ
+    significant_decimals: 7
+    sep6:
+      enabled: true
+      deposit:
+        enabled: true
+        min_amount: 0
+        max_amount: 10
+        methods:
+          - bank_account
+      withdraw:
+        enabled: true
+        min_amount: 0
+        max_amount: 10
+        methods:
+          - bank_account
+    sep24:
+      enabled: true
+      deposit:
+        enabled: true
+        min_amount: 0
+        max_amount: 10
+        methods:
+          - bank_account
+      withdraw:
+        enabled: true
+        min_amount: 0
+        max_amount: 10
+        methods:
+          - bank_account
+    sep31:
+      enabled: false
+    sep38:
+      enabled: false
+
+  - id: iso4217:USD
+    significant_decimals: 2
+    sep31:
+      enabled: true
+      receive:
+        min_amount: 1
+        max_amount: 100000
+        methods:
+          - bank_account
+          - mobile_wallet
+    sep38:
+      enabled: true
+      exchangeable_assets:
+        - stellar:native
+      country_codes:
+        - US
+      sell_delivery_methods:
+        - name: WIRE
+          description: Send USD to the anchor's bank account.
+      buy_delivery_methods:
+        - name: WIRE
+          description: Receive USD in the beneficiary bank account.

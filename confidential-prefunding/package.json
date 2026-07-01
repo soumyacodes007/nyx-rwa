@@ -1,0 +1,15 @@
+{
+  "name": "confidential-prefunding",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start:api": "node backend/src/index.mjs",
+    "start:business": "node backend/anchor-business-server/src/index.mjs",
+    "start:worker": "node backend/src/worker.mjs",
+    "start:frontend": "node frontend/server.mjs",
+    "print:urls": "node scripts/print-urls.mjs",
+    "fund:demo-accounts": "node scripts/fund-demo-accounts.mjs",
+    "test": "node --test backend/tests/*.test.mjs"
+  }
+}
+
