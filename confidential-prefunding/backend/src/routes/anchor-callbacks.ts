@@ -6,6 +6,8 @@ import {
   recordAnchorTransactionCallback,
   recordCustomerStatus
 } from "../services/anchor-platform.js";
+import { registerSep12Routes } from "./sep12.js";
+import { registerSep31Routes } from "./sep31.js";
 
 const customerStatusSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -61,6 +63,9 @@ export const registerBusinessCallbackRoutes = async (
     timestamp: new Date().toISOString()
   }));
 
+  await registerSep12Routes(app, config, db, "");
+  await registerSep31Routes(app, config, db, "");
+
   app.post("/customer/status", async (request, reply) => {
     const body = customerStatusSchema.parse(request.body);
     const customerId = body.customerId ?? body.customer_id ?? body.id;
@@ -74,10 +79,6 @@ export const registerBusinessCallbackRoutes = async (
       raw: request.body
     });
   });
-
-  app.post("/transactions", async (request) =>
-    recordAnchorTransactionCallback(db, transactionCallbackSchema.parse(request.body))
-  );
 
   app.post("/quotes", async (request) => ({
     accepted: true,

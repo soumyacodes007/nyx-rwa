@@ -112,6 +112,31 @@ export const upsertCustomerStatus = (
   );
 };
 
+export const getCustomerByIdOrAccount = (
+  db: AppDatabase,
+  input: { customerId?: string | null; account?: string | null }
+) => {
+  const row = input.customerId
+    ? db.prepare("SELECT * FROM anchor_customers WHERE customer_id = ?").get(input.customerId)
+    : input.account
+      ? db
+          .prepare("SELECT * FROM anchor_customers WHERE account = ? ORDER BY updated_at DESC LIMIT 1")
+          .get(input.account)
+      : undefined;
+  return row as
+    | {
+        customer_id: string;
+        account: string;
+        status: string;
+        memo: string | null;
+        reason: string | null;
+        raw: string;
+        created_at: string;
+        updated_at: string;
+      }
+    | undefined;
+};
+
 export const upsertAnchorTransaction = (
   db: AppDatabase,
   input: {
@@ -157,6 +182,41 @@ export const upsertAnchorTransaction = (
     now,
     now
   );
+};
+
+export const getAnchorTransactionById = (db: AppDatabase, anchorTransactionId: string) => {
+  const row = db
+    .prepare("SELECT * FROM anchor_transactions WHERE anchor_transaction_id = ?")
+    .get(anchorTransactionId) as
+    | {
+        id: string;
+        anchor_transaction_id: string;
+        stellar_transaction_id: string | null;
+        account: string;
+        sep_status: SepStatus;
+        product_status: ProductStatus;
+        amount_in: string | null;
+        amount_out: string | null;
+        asset_code: string | null;
+        raw: string;
+        created_at: string;
+        updated_at: string;
+      }
+    | undefined;
+  return row ?? null;
+};
+
+export const updateSepStatus = (
+  db: AppDatabase,
+  anchorTransactionId: string,
+  sepStatus: SepStatus,
+  raw?: unknown
+): void => {
+  db.prepare(`
+    UPDATE anchor_transactions
+    SET sep_status = ?, raw = COALESCE(?, raw), updated_at = ?
+    WHERE anchor_transaction_id = ?
+  `).run(sepStatus, raw ? JSON.stringify(raw) : null, nowIso(), anchorTransactionId);
 };
 
 export const updateProductStatus = (

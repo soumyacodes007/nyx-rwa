@@ -41,6 +41,16 @@ export const buildLiveSnapshot = async (
     contracts: Object.fromEntries(
       Object.entries(config.contracts).filter(([, value]) => Boolean(value))
     ) as Record<string, string>,
+    accounts: {
+      alpha: config.demoAccounts.alpha,
+      facility: config.demoAccounts.facility,
+      auditor: config.demoAccounts.auditor,
+      missing: [
+        !config.demoAccounts.alpha ? "ALPHA_PUBLIC_KEY missing" : null,
+        !config.demoAccounts.facility ? "FACILITY_PUBLIC_KEY missing" : null,
+        !config.demoAccounts.auditor ? "AUDITOR_PUBLIC_KEY missing" : null
+      ].filter((value): value is string => Boolean(value))
+    },
     anchorPlatform: {
       publicUrl: config.anchorPlatformPublicUrl,
       stellarTomlPreview: anchorTomlResult.ok ? anchorTomlResult.value.split("\n").slice(0, 6) : [],
@@ -70,6 +80,7 @@ export const buildLiveSnapshot = async (
     },
     dataSources: {
       quote: {
+        oracleMode: config.oracleMode,
         participantPolicy: sourceStatus(config.contracts.participantPolicy),
         collateralPolicyRegistry: sourceStatus(config.contracts.collateralPolicy),
         oracleAdapter: sourceStatus(config.contracts.oracleAdapter),

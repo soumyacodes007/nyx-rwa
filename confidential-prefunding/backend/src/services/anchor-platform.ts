@@ -1,12 +1,12 @@
 import type { AppConfig } from "../lib/env.js";
 import { newId } from "../lib/ids.js";
 import type { AppDatabase } from "../db/sqlite.js";
-import { upsertAnchorTransaction, upsertCustomerStatus } from "../db/sqlite.js";
+import { getAnchorTransactionById, upsertAnchorTransaction, upsertCustomerStatus } from "../db/sqlite.js";
 import type { AnchorCustomerStatusRequest } from "../types/anchor.js";
 import type { ProductStatus, SepStatus } from "../types/status.js";
 import { syncParticipantPolicy } from "./participant-policy-sync.js";
 
-const normalizeSepStatus = (value: unknown): SepStatus => {
+export const normalizeSepStatus = (value: unknown): SepStatus => {
   const raw = typeof value === "string" ? value : "pending_stellar";
   if (
     raw === "pending_sender" ||
@@ -36,7 +36,10 @@ export const recordAnchorTransactionCallback = (
   const anchorTransactionId = String(body.id ?? body.transaction_id ?? body.anchor_transaction_id ?? newId("anchor_tx"));
   const account = String(body.account ?? body.from ?? body.sender_id ?? "unknown");
   const sepStatus = normalizeSepStatus(body.status);
-  const productStatus = normalizeProductStatus(sepStatus);
+  const existing = getAnchorTransactionById(db, anchorTransactionId);
+  const normalizedProductStatus = normalizeProductStatus(sepStatus);
+  const productStatus =
+    normalizedProductStatus === "closed" ? normalizedProductStatus : existing?.product_status ?? normalizedProductStatus;
   upsertAnchorTransaction(db, {
     id: newId("tx"),
     anchorTransactionId,

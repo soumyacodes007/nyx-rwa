@@ -229,6 +229,17 @@ function html() {
             <p>Latest grant <span id="disclosure-id">none</span></p>
             <p><a id="disclosure-link" href="/disclosure">Open disclosure verifier</a></p>
           </article>
+          <article class="proof-card mono">
+            <span class="eyebrow">Demo Accounts</span>
+            <p>Alpha <span id="alpha-account">missing</span></p>
+            <p>Facility <span id="facility-account">missing</span></p>
+            <p>Auditor <span id="auditor-account">missing</span></p>
+          </article>
+          <article class="proof-card mono">
+            <span class="eyebrow">Data Sources</span>
+            <p>Oracle <span id="oracle-mode">unknown</span></p>
+            <p>Missing <span id="missing-config">none</span></p>
+          </article>
         </div>
         <pre id="state">Loading...</pre>
       </section>
@@ -249,6 +260,11 @@ function html() {
           const grantId = snapshot.product?.latestDisclosureGrantId || "";
           document.getElementById("disclosure-id").textContent = grantId ? grantId.slice(0, 10) + "..." + grantId.slice(-8) : "none";
           if (grantId) document.getElementById("disclosure-link").href = "/disclosure?grantId=" + encodeURIComponent(grantId);
+          document.getElementById("alpha-account").textContent = snapshot.accounts?.alpha ? short(snapshot.accounts.alpha) : "missing";
+          document.getElementById("facility-account").textContent = snapshot.accounts?.facility ? short(snapshot.accounts.facility) : "missing";
+          document.getElementById("auditor-account").textContent = snapshot.accounts?.auditor ? short(snapshot.accounts.auditor) : "missing";
+          document.getElementById("oracle-mode").textContent = snapshot.dataSources?.quote?.oracleMode || "unknown";
+          document.getElementById("missing-config").textContent = (snapshot.accounts?.missing || []).join(", ") || "none";
         })
         .catch((error) => {
           target.textContent = JSON.stringify({ error: error.message }, null, 2);

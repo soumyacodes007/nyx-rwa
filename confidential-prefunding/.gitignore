@@ -1,14 +1,19 @@
 .env
+.env.*
 !.env.example
 
 node_modules/
 dist/
 coverage/
+.next/
+.turbo/
+.cache/
 
 data/
 *.sqlite
 *.sqlite-*
 
+target/
 oz-confidential/target/
 oz-confidential/state/proof*/
 oz-confidential/state/register-*/
@@ -17,4 +22,10 @@ oz-confidential/circuits/target/
 oz-confidential/circuits/**/Prover.toml
 
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+tmp/
+temp/
 .DS_Store

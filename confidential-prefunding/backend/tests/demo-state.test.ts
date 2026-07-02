@@ -27,6 +27,12 @@ const baseConfig = {
   watcherPollIntervalMs: 15000,
   proverPollIntervalMs: 5000,
   ozConfidentialRoot: "./oz-confidential",
+  oracleMode: "mock",
+  demoAccounts: {
+    alpha: "GALPHA",
+    facility: "GFACILITY",
+    auditor: "GAUDITOR"
+  },
   demoAnchorSecretKey: null,
   participantPolicyOperatorSecretKey: null,
   contracts: {

@@ -1,0 +1,126 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { buildApi } from "../src/app.js";
+import { openAppDatabase } from "../src/db/sqlite.js";
+import type { AppConfig } from "../src/lib/env.js";
+
+const config = {
+  stellarRpcUrl: "https://rpc.example.test",
+  stellarHorizonUrl: "https://horizon.example.test",
+  stellarNetworkPassphrase: "Test SDF Network ; September 2015",
+  anchorStellarTomlUrl: "https://anchor.example.test/.well-known/stellar.toml",
+  anchorPlatformPublicUrl: "http://localhost:8080",
+  hostSep10Account: "HOST",
+  distributionAccount: "DIST",
+  demoAnchorAccount: "ANCHOR",
+  appStateDbPath: "unused",
+  apiPort: 3001,
+  businessServerPort: 8091,
+  frontendPort: 3000,
+  friendbotUrl: "https://friendbot.stellar.org",
+  anchorPlatformUrl: "http://anchor-platform:8080",
+  frontendApiBaseUrl: "http://api:3001",
+  prefundingFeeBps: 35,
+  watcherPollIntervalMs: 15000,
+  proverPollIntervalMs: 5000,
+  ozConfidentialRoot: "./oz-confidential",
+  oracleMode: "mock",
+  demoAccounts: {
+    alpha: "GALPHA",
+    facility: "GFACILITY",
+    auditor: "GAUDITOR"
+  },
+  demoAnchorSecretKey: null,
+  participantPolicyOperatorSecretKey: null,
+  contracts: {
+    participantPolicy: "CPOLICY",
+    collateralPolicy: "CCOLLATERAL",
+    oracleAdapter: "CORACLE",
+    collateralLock: "CLOCK",
+    prefundingCreditLine: "CCREDIT",
+    collateralSufficiencyVerifier: "CVERIFY",
+    collateralToken: "CTOKEN",
+    disclosureGrantRegistry: null,
+    repaymentHistory: null,
+    repaymentHistoryVerifier: null
+  }
+} satisfies AppConfig;
+
+test("SEP-12 stores customer status and returns SEP-shaped KYC status", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "prefunding-sep12-"));
+  const db = openAppDatabase(join(dir, "app.sqlite"));
+  const app = await buildApi(config, db);
+
+  const put = await app.inject({
+    method: "PUT",
+    url: "/api/sep12/customer",
+    payload: {
+      id: "cust-alpha",
+      account: "GALPHA",
+      type: "sep31-sender",
+      status: "PROCESSING",
+      fields: { email_address: "alpha@example.test" }
+    }
+  });
+  assert.equal(put.statusCode, 200);
+  assert.equal(put.json().status, "PROCESSING");
+
+  const get = await app.inject({
+    method: "GET",
+    url: "/api/sep12/customer?id=cust-alpha"
+  });
+  assert.equal(get.statusCode, 200);
+  assert.equal(get.json().id, "cust-alpha");
+  assert.equal(get.json().status, "PROCESSING");
+  assert.deepEqual(get.json().provided_fields, { email_address: "alpha@example.test" });
+
+  await app.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("SEP-31 creates and updates transactions without overwriting product state", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "prefunding-sep31-"));
+  const db = openAppDatabase(join(dir, "app.sqlite"));
+  const app = await buildApi(config, db);
+
+  const create = await app.inject({
+    method: "POST",
+    url: "/api/sep31/transactions",
+    payload: {
+      id: "tx-alpha-1",
+      sender_id: "GALPHA",
+      receiver_id: "GFACILITY",
+      amount_in: "1000.00",
+      amount_out: "995.00",
+      asset_code: "USDC",
+      status: "pending_stellar"
+    }
+  });
+  assert.equal(create.statusCode, 200);
+  assert.equal(create.json().status, "pending_stellar");
+  assert.equal(create.json().product_status, "prefunding_required");
+
+  const update = await app.inject({
+    method: "PATCH",
+    url: "/api/sep31/transaction/tx-alpha-1/status",
+    payload: {
+      status: "completed"
+    }
+  });
+  assert.equal(update.statusCode, 200);
+  assert.equal(update.json().status, "completed");
+  assert.equal(update.json().product_status, "closed");
+
+  const get = await app.inject({
+    method: "GET",
+    url: "/api/sep31/transaction?id=tx-alpha-1"
+  });
+  assert.equal(get.statusCode, 200);
+  assert.equal(get.json().more_info_url, "http://localhost:8080/sep31/transaction/tx-alpha-1");
+
+  await app.close();
+  rmSync(dir, { recursive: true, force: true });
+});

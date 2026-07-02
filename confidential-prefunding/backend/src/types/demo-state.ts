@@ -8,6 +8,12 @@ export type DemoState = {
     networkPassphrase: string;
   };
   contracts: Record<string, string>;
+  accounts: {
+    alpha: string | null;
+    facility: string | null;
+    auditor: string | null;
+    missing: string[];
+  };
   anchorPlatform: {
     publicUrl: string;
     reachable: boolean;
@@ -34,6 +40,7 @@ export type DemoState = {
   };
   dataSources: {
     quote: {
+      oracleMode: string;
       participantPolicy: "chain" | "missing_config";
       collateralPolicyRegistry: "chain" | "missing_config";
       oracleAdapter: "chain" | "missing_config";
