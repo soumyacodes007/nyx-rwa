@@ -6,6 +6,7 @@ import { registerCreditLineRoutes } from "./routes/credit-line.js";
 import { registerDemoStateRoutes } from "./routes/demo-state.js";
 import { registerDisclosureRoutes } from "./routes/disclosure.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerOracleRoutes } from "./routes/oracle.js";
 import { registerProofRoutes } from "./routes/proof.js";
 import { registerQuoteRoutes } from "./routes/quote.js";
 import { registerRepaymentHistoryRoutes } from "./routes/repayment-history.js";
@@ -32,6 +33,7 @@ export const buildApi = async (config: AppConfig, db: AppDatabase) => {
   await registerDemoStateRoutes(app, config, db);
   await registerAnchorCallbackRoutes(app, config, db);
   await registerQuoteRoutes(app, config, db);
+  await registerOracleRoutes(app, config);
   await registerProofRoutes(app, db);
   await registerCreditLineRoutes(app, config, db);
   await registerRepaymentHistoryRoutes(app, config, db);

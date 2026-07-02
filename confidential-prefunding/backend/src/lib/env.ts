@@ -33,6 +33,7 @@ export const config = {
   ),
   frontendApiBaseUrl: required("FRONTEND_API_BASE_URL", "http://api:3001"),
   prefundingFeeBps: number("PREFUNDING_FEE_BPS", 35),
+  oracleMode: required("ORACLE_MODE", "mock"),
   watcherPollIntervalMs: number("WATCHER_POLL_INTERVAL_MS", 15000),
   proverPollIntervalMs: number("PROVER_POLL_INTERVAL_MS", 5000),
   ozConfidentialRoot: required("OZ_CONFIDENTIAL_ROOT", "./oz-confidential"),
@@ -40,6 +41,11 @@ export const config = {
   distributionAccount: required("DISTRIBUTION_ACCOUNT", "REPLACE_ME"),
   demoAnchorAccount: required("DEMO_ANCHOR_ACCOUNT", "REPLACE_ME"),
   demoAnchorSecretKey: optional("DEMO_ANCHOR_SECRET_KEY"),
+  demoAccounts: {
+    alpha: optional("ALPHA_PUBLIC_KEY"),
+    facility: optional("FACILITY_PUBLIC_KEY"),
+    auditor: optional("AUDITOR_PUBLIC_KEY")
+  },
   participantPolicyOperatorSecretKey: optional("PARTICIPANT_POLICY_OPERATOR_SECRET_KEY"),
   contracts: {
     participantPolicy: optional("PARTICIPANT_POLICY_CONTRACT_ID"),

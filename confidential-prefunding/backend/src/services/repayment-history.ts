@@ -3,7 +3,7 @@ import type { AppConfig } from "../lib/env.js";
 import type { AppDatabase } from "../db/sqlite.js";
 import { insertRepaymentLeaf } from "../db/sqlite.js";
 import { newId } from "../lib/ids.js";
-import { buildRpcServer } from "./stellar-rpc.js";
+import { operatorKeypair, submitOperatorContractCall } from "./operator-tx.js";
 
 const normalizeHex = (value: string, field: string): string => {
   const hex = value.startsWith("0x") ? value.slice(2) : value;
@@ -26,10 +26,7 @@ const addressArg = (address: string): StellarSdk.xdr.ScVal =>
   StellarSdk.Address.fromString(address).toScVal();
 
 const getOperator = (config: AppConfig): StellarSdk.Keypair => {
-  if (!config.participantPolicyOperatorSecretKey) {
-    throw new Error("PARTICIPANT_POLICY_OPERATOR_SECRET_KEY is not configured");
-  }
-  return StellarSdk.Keypair.fromSecret(config.participantPolicyOperatorSecretKey);
+  return operatorKeypair(config);
 };
 
 const submitRepaymentCall = async (
@@ -39,39 +36,7 @@ const submitRepaymentCall = async (
 ): Promise<{ hash: string; ledger: number }> => {
   const contractId = config.contracts.repaymentHistory;
   if (!contractId) throw new Error("REPAYMENT_HISTORY_CONTRACT_ID is not configured");
-
-  const operator = getOperator(config);
-  const rpc = buildRpcServer(config);
-  const source = await rpc.getAccount(operator.publicKey());
-  const contract = new StellarSdk.Contract(contractId);
-  let tx = new StellarSdk.TransactionBuilder(source, {
-    fee: StellarSdk.BASE_FEE,
-    networkPassphrase: config.stellarNetworkPassphrase
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(180)
-    .build();
-
-  const simulation = await rpc.simulateTransaction(tx);
-  if (StellarSdk.rpc.Api.isSimulationError(simulation)) {
-    throw new Error(`${method} simulation failed: ${simulation.error}`);
-  }
-  tx = StellarSdk.rpc.assembleTransaction(tx, simulation).build();
-  tx.sign(operator);
-
-  const sent = await rpc.sendTransaction(tx);
-  if (sent.status === "ERROR") {
-    throw new Error(`${method} send failed: ${sent.errorResult}`);
-  }
-  let txResult = await rpc.getTransaction(sent.hash);
-  for (let i = 0; i < 30 && txResult.status === "NOT_FOUND"; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    txResult = await rpc.getTransaction(sent.hash);
-  }
-  if (txResult.status !== "SUCCESS") {
-    throw new Error(`${method} transaction status ${txResult.status}`);
-  }
-  return { hash: sent.hash, ledger: txResult.ledger };
+  return submitOperatorContractCall(config, contractId, method, args);
 };
 
 export const seedRepaymentLeaf = async (
