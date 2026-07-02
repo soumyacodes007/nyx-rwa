@@ -21,6 +21,7 @@ export type ConfidentialTransferRequest = {
   from: string;
   to: string;
   dataXdrBase64: string;
+  mergeBeforeTransfer?: boolean;
   auditorPayload?: Record<string, unknown>;
   eventPayload?: Record<string, unknown>;
 };

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Serialize;
 use serde_json::{json, Value};
 use soroban_poseidon::{poseidon2_hash, Field as PoseidonField, Poseidon2Config, Poseidon2Sponge};
@@ -199,6 +200,7 @@ struct Runner {
     wasm_dir: PathBuf,
     state_dir: PathBuf,
     circuits_dir: PathBuf,
+    active_network: String,
     env: Env,
 }
 
@@ -214,16 +216,26 @@ impl Runner {
         fs::create_dir_all(&config_dir)?;
         let env = Env::default();
         env.cost_estimate().budget().reset_unlimited();
-        Ok(Self { root, config_dir, wasm_dir, state_dir, circuits_dir, env })
+        let active_network = env::var("NYX_RUNNER_NETWORK").unwrap_or_else(|_| NETWORK_NAME.to_string());
+        Ok(Self { root, config_dir, wasm_dir, state_dir, circuits_dir, active_network, env })
+    }
+
+    fn active_network(&self) -> &str {
+        self.active_network.as_str()
     }
 
     fn run(&self) -> Result<()> {
         eprintln!("==> checking toolchain");
         self.ensure_binaries()?;
-        eprintln!("==> resetting localnet");
-        self.reset_localnet()?;
-        eprintln!("==> ensuring network profile");
-        self.ensure_network_profile()?;
+        if self.active_network() == TESTNET_NAME {
+            eprintln!("==> ensuring testnet profile");
+            self.ensure_testnet_profile()?;
+        } else {
+            eprintln!("==> resetting localnet");
+            self.reset_localnet()?;
+            eprintln!("==> ensuring network profile");
+            self.ensure_network_profile()?;
+        }
 
         let account_configs = [
             ParticipantConfig { name: "admin", sk: 7 },
@@ -266,6 +278,51 @@ impl Runner {
             .cloned()
             .ok_or_else(|| anyhow!("missing cUSDC token context"))?;
 
+        let mut facility = actors
+            .remove("facility")
+            .ok_or_else(|| anyhow!("missing facility actor"))?;
+        let credit_executor = actors
+            .get("credit-executor")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing credit-executor actor"))?;
+
+        eprintln!("==> prepare facility cUSDC for Nyx draw");
+        self.deposit(&deployments.cusdc, "facility", &account_addrs["facility"], 125_000)?;
+        facility.account_mut(&c_usdc).apply_deposit(&self.env, 125_000);
+        self.merge(&deployments.cusdc, "facility")?;
+        facility.account_mut(&c_usdc).merge(&self.env);
+
+        let op_demo_draw_set_spender = OperationScalars { r_e: 107, sigma: 207, sigma_alt: Some(407) };
+        let op_demo_draw =
+            OperationScalars { r_e: 108, sigma: 0, sigma_alt: Some(408) };
+        let op_demo_repayment = OperationScalars { r_e: 109, sigma: 209, sigma_alt: None };
+        let op_demo_repayment_buffer = OperationScalars { r_e: 110, sigma: 210, sigma_alt: None };
+        eprintln!("==> set spender facility -> credit-executor for Nyx draw");
+        self.set_spender(
+            &c_usdc,
+            &mut facility,
+            &credit_executor,
+            50_000,
+            self.current_ledger()?.saturating_add(LIVE_UNTIL_LEDGER_OFFSET),
+            &account_addrs["facility"],
+            &op_demo_draw_set_spender,
+        )?;
+
+        eprintln!("==> privately fund Alpha repayment buffer");
+        let repayment_buffer_transfer = self.confidential_transfer(
+            &c_usdc,
+            &mut facility,
+            actors.get_mut("alpha").unwrap(),
+            51_000,
+            &account_addrs["facility"],
+            &op_demo_repayment_buffer,
+            true,
+        )?;
+        self.merge(&deployments.cusdc, "alpha")?;
+        actors.get_mut("alpha").unwrap().account_mut(&c_usdc).merge(&self.env);
+
+        actors.insert("facility".to_string(), facility.clone());
+
         eprintln!("==> deposit alpha -> cUSDC");
         self.deposit(&deployments.cusdc, "alpha", &account_addrs["alpha"], 1_000)?;
         {
@@ -291,6 +348,7 @@ impl Runner {
             200,
             &account_addrs["alpha"],
             &op_transfer,
+            true,
         )?;
 
         let credit_executor = actors
@@ -314,7 +372,7 @@ impl Runner {
         )?;
 
         eprintln!("==> spender transfer credit-executor: alpha -> facility");
-        self.confidential_transfer_from(
+        let _spender_transfer_result = self.confidential_transfer_from(
             &c_usdc,
             actors.get_mut("alpha").unwrap(),
             &credit_executor,
@@ -322,6 +380,7 @@ impl Runner {
             50,
             &account_addrs["credit-executor"],
             &op_spender_transfer,
+            true,
         )?;
 
         eprintln!("==> revoke spender alpha -> credit-executor");
@@ -336,6 +395,33 @@ impl Runner {
         eprintln!("==> merge facility cUSDC");
         self.merge(&deployments.cusdc, "facility")?;
         facility.account_mut(&c_usdc).merge(&self.env);
+
+        let mut demo_facility = facility.clone();
+        let mut demo_alpha = actors
+            .get("alpha")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing alpha actor"))?;
+        eprintln!("==> export live Nyx draw transfer payload");
+        let demo_draw_transfer = self.confidential_transfer_from(
+            &c_usdc,
+            &mut demo_facility,
+            &credit_executor,
+            &mut demo_alpha,
+            50_000,
+            &account_addrs["credit-executor"],
+            &op_demo_draw,
+            false,
+        )?;
+        eprintln!("==> export live Nyx repayment transfer payload");
+        let demo_repayment_transfer = self.confidential_transfer(
+            &c_usdc,
+            &mut demo_alpha,
+            &mut demo_facility,
+            50_142,
+            &account_addrs["alpha"],
+            &op_demo_repayment,
+            false,
+        )?;
 
         actors.insert("facility".to_string(), facility.clone());
 
@@ -364,6 +450,13 @@ impl Runner {
             10,
             &account_addrs["facility"],
             &blocked_send,
+        )?;
+        eprintln!("==> unblock facility after policy rejection test");
+        self.set_policy_blocked(
+            &deployments.policy,
+            &account_addrs["facility"],
+            false,
+            &account_addrs["admin"],
         )?;
 
         eprintln!("==> collect state views and events");
@@ -418,6 +511,41 @@ impl Runner {
                     "set_spender_creates_allowance_commitment".to_string(),
                     json!({
                         "delegation_view": delegation_view,
+                    }),
+                ),
+                (
+                    "nyx_live_repayment_buffer_artifact".to_string(),
+                    json!({
+                        "amount": "51000",
+                        "from": account_addrs["facility"],
+                        "to": account_addrs["alpha"],
+                        "transfer": repayment_buffer_transfer.event_snapshot(),
+                        "auditor_decrypt": repayment_buffer_transfer.decrypt_report(&self.env, &account_addrs["auditor"]),
+                    }),
+                ),
+                (
+                    "nyx_live_draw_artifact".to_string(),
+                    json!({
+                        "amount": "50000",
+                        "from": account_addrs["facility"],
+                        "to": account_addrs["alpha"],
+                        "spender": account_addrs["credit-executor"],
+                        "transfer": demo_draw_transfer.event_snapshot(),
+                        "auditor_decrypt": demo_draw_transfer.decrypt_report(&self.env, &account_addrs["auditor"]),
+                        "data_xdr_base64": demo_draw_transfer.data_xdr_base64,
+                    }),
+                ),
+                (
+                    "nyx_live_repayment_artifact".to_string(),
+                    json!({
+                        "amount": "50142",
+                        "from": account_addrs["alpha"],
+                        "to": account_addrs["facility"],
+                        "requires_merge_before_transfer": false,
+                        "source_note": "repayment proof spends Alpha's pre-merged private repayment buffer; the draw transfer remains a separate live cUSDC ciphertext",
+                        "transfer": demo_repayment_transfer.event_snapshot(),
+                        "auditor_decrypt": demo_repayment_transfer.decrypt_report(&self.env, &account_addrs["auditor"]),
+                        "data_xdr_base64": demo_repayment_transfer.data_xdr_base64,
                     }),
                 ),
             ]),
@@ -1247,8 +1375,14 @@ impl Runner {
     ) -> Result<BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
         for cfg in configs {
-            self.run_stellar(["keys", "generate", cfg.name, "--overwrite"], true)?;
-            self.run_stellar(["keys", "fund", cfg.name, "-n", NETWORK_NAME], true)?;
+            if self.active_network() == TESTNET_NAME
+                && self.run_stellar(["keys", "public-key", cfg.name], true).is_ok()
+            {
+                self.run_stellar(["keys", "fund", cfg.name, "-n", self.active_network()], true)?;
+            } else {
+                self.run_stellar(["keys", "generate", cfg.name, "--overwrite"], true)?;
+                self.run_stellar(["keys", "fund", cfg.name, "-n", self.active_network()], true)?;
+            }
             let address = self
                 .run_stellar(["keys", "public-key", cfg.name], true)?
                 .trim()
@@ -1696,7 +1830,7 @@ impl Runner {
     }
 
     fn deploy_wasm(&self, wasm_path: PathBuf, source: &str, ctor_args: Vec<String>) -> Result<String> {
-        self.deploy_wasm_on(NETWORK_NAME, wasm_path, source, ctor_args)
+        self.deploy_wasm_on(self.active_network(), wasm_path, source, ctor_args)
     }
 
     fn deploy_wasm_on(
@@ -2044,7 +2178,7 @@ impl Runner {
                 "--source-account".to_string(),
                 "admin".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "register_key".to_string(),
                 "--auditor-id".to_string(),
@@ -2079,7 +2213,7 @@ impl Runner {
                     "--source-account".to_string(),
                     "admin".to_string(),
                     "-n".to_string(),
-                    NETWORK_NAME.to_string(),
+                    self.active_network().to_string(),
                     "--".to_string(),
                     "register_verification_key_u32".to_string(),
                     "--circuit-type".to_string(),
@@ -2171,7 +2305,7 @@ impl Runner {
                         "--source-account".to_string(),
                         actor.name.to_string(),
                         "-n".to_string(),
-                        NETWORK_NAME.to_string(),
+                        self.active_network().to_string(),
                         "--".to_string(),
                         "register".to_string(),
                         "--account".to_string(),
@@ -2196,7 +2330,7 @@ impl Runner {
     ) -> Result<()> {
         for token in [&deployments.tusdc, &deployments.ttbill, &deployments.txaum] {
             self.mint_public(token, &addrs["alpha"], 10_000, &addrs["admin"])?;
-            self.mint_public(token, &addrs["facility"], 2_000, &addrs["admin"])?;
+            self.mint_public(token, &addrs["facility"], 150_000, &addrs["admin"])?;
             self.mint_public(token, &addrs["credit-executor"], 500, &addrs["admin"])?;
         }
         Ok(())
@@ -2212,7 +2346,7 @@ impl Runner {
                 "--source-account".to_string(),
                 "admin".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "mint".to_string(),
                 "--to".to_string(),
@@ -2237,7 +2371,7 @@ impl Runner {
                 "--source-account".to_string(),
                 source_identity.to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "deposit".to_string(),
                 "--from".to_string(),
@@ -2263,7 +2397,7 @@ impl Runner {
                 "--source-account".to_string(),
                 identity.to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "merge".to_string(),
                 "--account".to_string(),
@@ -2283,6 +2417,7 @@ impl Runner {
         amount: u128,
         from_addr: &str,
         op: &OperationScalars,
+        submit: bool,
     ) -> Result<TransferArtifacts> {
         let from_name = from.name.to_string();
         let from_state = from.account(token).clone();
@@ -2343,28 +2478,31 @@ impl Runner {
             proof: Bytes::from_slice(&self.env, &proof_bytes),
         };
         let data = payload.to_xdr(&self.env);
-        let file = write_temp_file(data.to_alloc_vec().as_slice())?;
-        self.run_stellar_owned(
-            vec![
-                "contract".to_string(),
-                "invoke".to_string(),
-                "--id".to_string(),
-                token.confidential_token.clone(),
-                "--source-account".to_string(),
-                from_name,
-                "-n".to_string(),
-                NETWORK_NAME.to_string(),
-                "--".to_string(),
-                "confidential_transfer".to_string(),
-                "--from".to_string(),
-                from_addr.to_string(),
-                "--to".to_string(),
-                to.stellar_address.clone(),
-                "--data-file-path".to_string(),
-                file.path().to_string_lossy().to_string(),
-            ],
-            true,
-        )?;
+        let data_vec = data.to_alloc_vec();
+        if submit {
+            let file = write_temp_file(data_vec.as_slice())?;
+            self.run_stellar_owned(
+                vec![
+                    "contract".to_string(),
+                    "invoke".to_string(),
+                    "--id".to_string(),
+                    token.confidential_token.clone(),
+                    "--source-account".to_string(),
+                    from_name,
+                    "-n".to_string(),
+                    self.active_network().to_string(),
+                    "--".to_string(),
+                    "confidential_transfer".to_string(),
+                    "--from".to_string(),
+                    from_addr.to_string(),
+                    "--to".to_string(),
+                    to.stellar_address.clone(),
+                    "--data-file-path".to_string(),
+                    file.path().to_string_lossy().to_string(),
+                ],
+                true,
+            )?;
+        }
 
         let from_state = from.account_mut(token);
         from_state.spendable_value = v_new;
@@ -2384,6 +2522,7 @@ impl Runner {
             r_aud_r,
             v_aud_s,
             b_aud_s,
+            data_xdr_base64: BASE64.encode(data_vec),
         })
     }
 
@@ -2439,7 +2578,7 @@ impl Runner {
                 "--source-account".to_string(),
                 from.name.to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "confidential_transfer".to_string(),
                 "--from".to_string(),
@@ -2541,7 +2680,7 @@ impl Runner {
                 "--source-account".to_string(),
                 owner_name,
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "set_spender".to_string(),
                 "--account".to_string(),
@@ -2589,7 +2728,8 @@ impl Runner {
         amount: u128,
         spender_addr: &str,
         op: &OperationScalars,
-    ) -> Result<()> {
+        submit: bool,
+    ) -> Result<SpenderTransferArtifacts> {
         eprintln!(
             "   -> spender transfer current ledger={} for spender={}",
             self.current_ledger()?,
@@ -2649,7 +2789,7 @@ impl Runner {
             payload: SpenderTransferPayload {
                 c_a_new: c_a_new.clone(),
                 c_tx: c_tx.clone(),
-                r_e: r_e_point,
+                r_e: r_e_point.clone(),
                 v_tilde: field_to_bytesn(&self.env, &encrypt_amount(&self.env, amount, &s_x, &sigma_a)),
                 a_tilde_new: field_to_bytesn(&self.env, &a_tilde_new),
                 sigma_a_new: field_to_bytesn(&self.env, &sigma_a_new),
@@ -2664,31 +2804,33 @@ impl Runner {
             ),
         };
         let data = payload.to_xdr(&self.env);
-        let file = write_temp_file(data.to_alloc_vec().as_slice())?;
-
-        self.run_stellar_owned(
-            vec![
-                "contract".to_string(),
-                "invoke".to_string(),
-                "--id".to_string(),
-                token.confidential_token.clone(),
-                "--source-account".to_string(),
-                spender.name.to_string(),
-                "-n".to_string(),
-                NETWORK_NAME.to_string(),
-                "--".to_string(),
-                "confidential_transfer_from".to_string(),
-                "--spender".to_string(),
-                spender_addr.to_string(),
-                "--from".to_string(),
-                owner_addr,
-                "--to".to_string(),
-                recipient.stellar_address.clone(),
-                "--data-file-path".to_string(),
-                file.path().to_string_lossy().to_string(),
-            ],
-            true,
-        )?;
+        let data_vec = data.to_alloc_vec();
+        if submit {
+            let file = write_temp_file(data_vec.as_slice())?;
+            self.run_stellar_owned(
+                vec![
+                    "contract".to_string(),
+                    "invoke".to_string(),
+                    "--id".to_string(),
+                    token.confidential_token.clone(),
+                    "--source-account".to_string(),
+                    spender.name.to_string(),
+                    "-n".to_string(),
+                    self.active_network().to_string(),
+                    "--".to_string(),
+                    "confidential_transfer_from".to_string(),
+                    "--spender".to_string(),
+                    spender_addr.to_string(),
+                    "--from".to_string(),
+                    owner_addr,
+                    "--to".to_string(),
+                    recipient.stellar_address.clone(),
+                    "--data-file-path".to_string(),
+                    file.path().to_string_lossy().to_string(),
+                ],
+                true,
+            )?;
+        }
 
         let delegation = owner
             .account_mut(token)
@@ -2704,7 +2846,16 @@ impl Runner {
         recipient_state.receiving_r = field_add(&recipient_state.receiving_r, &r_tx);
         recipient_state.receiving_balance =
             Grumpkin::add(&self.env, &recipient_state.receiving_balance, &c_tx);
-        Ok(())
+        Ok(SpenderTransferArtifacts {
+            amount,
+            sigma: sigma_a,
+            r_e_point,
+            v_aud_r,
+            r_aud_r,
+            v_aud_s,
+            a_aud_s,
+            data_xdr_base64: BASE64.encode(data_vec),
+        })
     }
 
     fn revoke_spender(
@@ -2776,7 +2927,7 @@ impl Runner {
                 "--source-account".to_string(),
                 owner_name,
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "revoke_spender".to_string(),
                 "--account".to_string(),
@@ -2813,7 +2964,7 @@ impl Runner {
                 "--source-account".to_string(),
                 "admin".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--".to_string(),
                 "set_blocked".to_string(),
                 "--account".to_string(),
@@ -2838,7 +2989,7 @@ impl Runner {
                 "--source-account".to_string(),
                 "admin".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--send".to_string(),
                 "no".to_string(),
                 "--".to_string(),
@@ -2860,7 +3011,7 @@ impl Runner {
                 "--source-account".to_string(),
                 "admin".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--send".to_string(),
                 "no".to_string(),
                 "--".to_string(),
@@ -2884,7 +3035,7 @@ impl Runner {
                 "--source-account".to_string(),
                 "admin".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
                 "--send".to_string(),
                 "no".to_string(),
                 "--".to_string(),
@@ -2912,7 +3063,7 @@ impl Runner {
                 "--count".to_string(),
                 "200".to_string(),
                 "-n".to_string(),
-                NETWORK_NAME.to_string(),
+                self.active_network().to_string(),
             ],
             true,
         )?;
@@ -2925,7 +3076,7 @@ impl Runner {
     }
 
     fn current_ledger(&self) -> Result<u32> {
-        self.current_ledger_on(NETWORK_NAME)
+        self.current_ledger_on(self.active_network())
     }
 
     fn current_ledger_on(&self, network: &str) -> Result<u32> {
@@ -3446,6 +3597,18 @@ struct TransferArtifacts {
     r_aud_r: BigUint,
     v_aud_s: BigUint,
     b_aud_s: BigUint,
+    data_xdr_base64: String,
+}
+
+struct SpenderTransferArtifacts {
+    amount: u128,
+    sigma: BigUint,
+    r_e_point: Point,
+    v_aud_r: BigUint,
+    r_aud_r: BigUint,
+    v_aud_s: BigUint,
+    a_aud_s: BigUint,
+    data_xdr_base64: String,
 }
 
 impl TransferArtifacts {
@@ -3456,6 +3619,32 @@ impl TransferArtifacts {
             "r_aud_r": self.r_aud_r.to_str_radix(16),
             "v_aud_s": self.v_aud_s.to_str_radix(16),
             "b_aud_s": self.b_aud_s.to_str_radix(16),
+        })
+    }
+
+    fn decrypt_report(&self, env: &Env, _auditor_addr: &str) -> Value {
+        let auditor_secret = BigUint::from(55u32);
+        let shared = ecdh_x(env, &self.r_e_point, &auditor_secret);
+        let (mask0, mask1) = sponge_squeeze_2(env, DOMAIN_AUDITOR_RECIPIENT, &shared, &self.sigma);
+        let amount = field_sub(&self.v_aud_r, &mask0);
+        let randomness = field_sub(&self.r_aud_r, &mask1);
+        json!({
+            "decrypted_amount": amount.to_string(),
+            "expected_amount": self.amount.to_string(),
+            "amount_matches": amount == BigUint::from(self.amount),
+            "decrypted_randomness_hex": randomness.to_str_radix(16),
+        })
+    }
+}
+
+impl SpenderTransferArtifacts {
+    fn event_snapshot(&self) -> Value {
+        json!({
+            "r_e": hex::encode(point_to_bytes(&self.r_e_point)),
+            "v_aud_r": self.v_aud_r.to_str_radix(16),
+            "r_aud_r": self.r_aud_r.to_str_radix(16),
+            "v_aud_s": self.v_aud_s.to_str_radix(16),
+            "a_aud_s": self.a_aud_s.to_str_radix(16),
         })
     }
 

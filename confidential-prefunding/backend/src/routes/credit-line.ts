@@ -13,6 +13,7 @@ const confidentialTransferSchema = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
   dataXdrBase64: z.string().min(1),
+  mergeBeforeTransfer: z.boolean().optional(),
   auditorPayload: z.record(z.unknown()).optional(),
   eventPayload: z.record(z.unknown()).optional()
 });

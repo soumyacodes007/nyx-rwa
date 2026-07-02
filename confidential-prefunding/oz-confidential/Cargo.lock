@@ -1166,6 +1166,7 @@ name = "oz-confidential-runner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "hex",
  "num-bigint",
  "num-traits",

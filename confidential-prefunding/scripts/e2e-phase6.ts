@@ -524,6 +524,7 @@ try {
       from: alpha,
       to: facility,
       dataXdrBase64: repaymentTransferDataXdrBase64,
+      mergeBeforeTransfer: process.env.REPAYMENT_MERGE_BEFORE_TRANSFER !== "0",
       auditorPayload: optionalJsonEnv("REPAYMENT_AUDITOR_PAYLOAD_JSON")
     }
   });
@@ -729,6 +730,11 @@ try {
   }>(`/api/disclosure/${disclosure.grantId}`);
   if (!revokedLookup.grantStatus.revoked) throw new Error("revoked disclosure link still appears valid");
 
+  const sep31Completed = await client.post(`/api/sep31/transaction/${anchorTransactionId}/complete`, {
+    settlementReference: `settlement-${anchorTransactionId}`,
+    note: "Demo settlement completed after private prefunding draw, repayment, and disclosure checks"
+  });
+
   const watcher = await client.post("/api/watcher/sync", {});
   const finalState = await client.get("/api/demo/state");
 
@@ -741,7 +747,8 @@ try {
         funding,
         anchorTransaction: {
           id: anchorTransactionId,
-          sepStatus: "pending_stellar",
+          sepStatus: "completed",
+          settlement: sep31Completed,
           creationPath: "direct Anchor callback ingestion into backend; Anchor Platform reachability checked separately"
         },
         participantPolicy: { accepted },

@@ -79,6 +79,12 @@ export const submitAndRecordConfidentialTransfer = async (
         ]
       : [addressArg(input.request.from), addressArg(input.request.to), bytesArg(data)];
 
+  const mergeTx =
+    method === "confidential_transfer" && input.request.mergeBeforeTransfer
+      ? await submitContractCallWithKeypair(config, signer, tokenContractId, "merge", [
+          addressArg(input.request.from)
+        ])
+      : null;
   const tx = await submitContractCallWithKeypair(config, signer, tokenContractId, method, args);
   const eventName = method === "confidential_transfer_from" ? "spender_transfer" : "transfer";
   const eventPayload = {
@@ -91,6 +97,7 @@ export const submitAndRecordConfidentialTransfer = async (
     to: input.request.to,
     spender,
     dataXdrSha256,
+    ...(mergeTx ? { mergeTxHash: mergeTx.hash, mergeLedger: mergeTx.ledger } : {}),
     ...(input.request.eventPayload ?? {})
   };
 
