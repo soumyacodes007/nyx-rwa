@@ -120,7 +120,10 @@ const resolveSigner = (
     return { signer, spender };
   }
 
-  const signer = keypairFromSecret(config.demoAnchorSecretKey, "DEMO_ANCHOR_SECRET_KEY");
+  const signer = keypairFromSecret(
+    request.signerSecretKey ?? config.demoAnchorSecretKey,
+    request.signerSecretKey ? "profile signerSecretKey" : "DEMO_ANCHOR_SECRET_KEY"
+  );
   if (request.from !== signer.publicKey()) {
     throw new Error("confidential_transfer signer must match the from account");
   }

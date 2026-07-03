@@ -1,11 +1,13 @@
 import type { AppConfig } from "../lib/env.js";
 import type { AppDatabase } from "../db/sqlite.js";
 import {
+  getAnchorTransactionById,
   getLatestAnchorTransaction,
   getLatestConfidentialTransferEvidence,
   getLatestDisclosureGrantId,
   getLatestProofJobId,
-  getLatestQuoteId
+  getLatestQuoteId,
+  getSnapshot
 } from "../db/sqlite.js";
 import type { DemoState } from "../types/demo-state.js";
 import { fetchAnchorToml, fetchHorizonRoot, fetchLatestLedger, fetchRpcHealth } from "./stellar-rpc.js";
@@ -13,9 +15,15 @@ import { getTrackedContractIds, getWatcherState } from "./watcher.js";
 import { snapshotCache } from "./snapshot-cache.js";
 
 const SNAPSHOT_KEY = "demo_state";
+const DEMO_FLOW_SNAPSHOT_KEY = "demo_flow_state";
 const sourceStatus = (value: string | null): "chain" | "missing_config" =>
   value ? "chain" : "missing_config";
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+type DemoFlowSnapshotRef = {
+  profileId?: string | null;
+  anchorTransactionId?: string | null;
+};
 
 export const buildLiveSnapshot = async (
   config: AppConfig,
@@ -32,6 +40,10 @@ export const buildLiveSnapshot = async (
   const latestTx = getLatestAnchorTransaction(db);
   const latestConfidentialTransfer = getLatestConfidentialTransferEvidence(db);
   const watcher = getWatcherState(db);
+  const flowState = getSnapshot<DemoFlowSnapshotRef>(db, DEMO_FLOW_SNAPSHOT_KEY)?.payload ?? null;
+  const activeAnchorTx = flowState?.anchorTransactionId
+    ? getAnchorTransactionById(db, flowState.anchorTransactionId)
+    : latestTx;
 
   const snapshot: DemoState = {
     generatedAt: new Date().toISOString(),
@@ -47,6 +59,11 @@ export const buildLiveSnapshot = async (
       alpha: config.demoAccounts.alpha,
       facility: config.demoAccounts.facility,
       auditor: config.demoAccounts.auditor,
+      activeAnchor: {
+        profileId: flowState?.profileId ?? null,
+        account: activeAnchorTx?.account ?? config.demoAccounts.alpha,
+        transactionId: flowState?.anchorTransactionId ?? latestTx?.anchor_transaction_id ?? null
+      },
       missing: [
         !config.demoAccounts.alpha ? "ALPHA_PUBLIC_KEY missing" : null,
         !config.demoAccounts.facility ? "FACILITY_PUBLIC_KEY missing" : null,

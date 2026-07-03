@@ -18,6 +18,7 @@ export type ConfidentialTransferRequest = {
   tokenContractId?: string;
   method?: ConfidentialTransferMethod;
   spender?: string;
+  signerSecretKey?: string;
   from: string;
   to: string;
   dataXdrBase64: string;

@@ -75,6 +75,7 @@ type RepaymentHistoryFixture = {
 };
 
 type DemoFlowSnapshot = {
+  profileId: string | null;
   anchorTransactionId: string | null;
   positionId: string | null;
   quote: PrefundingQuote | null;
@@ -118,6 +119,7 @@ type DemoFlowSnapshot = {
 const nowIso = () => new Date().toISOString();
 
 const blankState = (): DemoFlowSnapshot => ({
+  profileId: null,
   anchorTransactionId: null,
   positionId: null,
   quote: null,
@@ -148,10 +150,104 @@ const demoSep31TransactionId = (): string =>
   process.env.NEXT_PUBLIC_DEMO_SEP31_TRANSACTION_ID ??
   "sep31-alpha-001";
 
-const resolveAlpha = (config: AppConfig, account?: string): string => {
-  const alpha = account ?? config.demoAccounts.alpha ?? config.demoAnchorAccount;
-  if (!configured(alpha)) throw new Error("ALPHA_PUBLIC_KEY or DEMO_ANCHOR_ACCOUNT is not configured");
-  return alpha;
+const freshDemoSep31TransactionId = (profileId: string): string => {
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  return `sep31-${profileId}-${stamp}`;
+};
+
+type DemoAnchorProfile = {
+  id: string;
+  account: string;
+  signerSecretKey?: string;
+  organizationName: string;
+  emailAddress: string;
+  drawTransferDataXdrBase64: string;
+  drawAuditorPayload?: Record<string, unknown>;
+  repaymentTransferDataXdrBase64: string;
+  repaymentAuditorPayload?: Record<string, unknown>;
+};
+
+const normalizeProfileId = (profile?: string | null): string =>
+  (profile ?? process.env.DEMO_ANCHOR_PROFILE ?? "alpha").trim().toLowerCase();
+
+const profilePrefix = (profile: string): string =>
+  profile.replace(/[^a-z0-9]/gi, "_").replace(/^_+|_+$/g, "").toUpperCase();
+
+const profileEnv = (
+  profile: string,
+  key: string,
+  alphaFallback?: string | null
+): string | undefined => {
+  const value = process.env[`${profilePrefix(profile)}_${key}`];
+  if (configured(value)) return value;
+  return profile === "alpha" && configured(alphaFallback) ? alphaFallback : undefined;
+};
+
+const optionalProfileJsonEnv = (
+  profile: string,
+  key: string,
+  alphaFallbackName?: string
+): Record<string, unknown> | undefined => {
+  const value =
+    process.env[`${profilePrefix(profile)}_${key}`] ??
+    (profile === "alpha" && alphaFallbackName ? process.env[alphaFallbackName] : undefined);
+  if (!value) return undefined;
+  return JSON.parse(value) as Record<string, unknown>;
+};
+
+const requiredProfileEnv = (
+  profile: string,
+  key: string,
+  alphaFallbackName?: string
+): string => {
+  const value =
+    process.env[`${profilePrefix(profile)}_${key}`] ??
+    (profile === "alpha" && alphaFallbackName ? process.env[alphaFallbackName] : undefined);
+  if (!configured(value)) {
+    throw new Error(`${profilePrefix(profile)}_${key} is required for demo profile ${profile}`);
+  }
+  return value;
+};
+
+const resolveDemoProfile = (
+  config: AppConfig,
+  input: { profile?: string | null; account?: string } = {}
+): DemoAnchorProfile => {
+  const id = normalizeProfileId(input.profile);
+  const account =
+    input.account ??
+    profileEnv(id, "PUBLIC_KEY", config.demoAccounts.alpha ?? config.demoAnchorAccount);
+  if (!configured(account)) {
+    throw new Error(`${profilePrefix(id)}_PUBLIC_KEY is required for demo profile ${id}`);
+  }
+  const signerSecretKey = profileEnv(id, "ANCHOR_SECRET_KEY", config.demoAnchorSecretKey);
+  return {
+    id,
+    account,
+    ...(signerSecretKey ? { signerSecretKey } : {}),
+    organizationName:
+      profileEnv(id, "ORGANIZATION_NAME", "Alpha Remit") ??
+      `${id.slice(0, 1).toUpperCase()}${id.slice(1)} Remit`,
+    emailAddress:
+      profileEnv(id, "EMAIL_ADDRESS", "ops@alpha-remit.example") ??
+      `ops@${id.replace(/[^a-z0-9-]/g, "-")}.example`,
+    drawTransferDataXdrBase64: requiredProfileEnv(
+      id,
+      "DRAW_TRANSFER_DATA_XDR_BASE64",
+      "DRAW_TRANSFER_DATA_XDR_BASE64"
+    ),
+    drawAuditorPayload: optionalProfileJsonEnv(id, "DRAW_AUDITOR_PAYLOAD_JSON", "DRAW_AUDITOR_PAYLOAD_JSON"),
+    repaymentTransferDataXdrBase64: requiredProfileEnv(
+      id,
+      "REPAYMENT_TRANSFER_DATA_XDR_BASE64",
+      "REPAYMENT_TRANSFER_DATA_XDR_BASE64"
+    ),
+    repaymentAuditorPayload: optionalProfileJsonEnv(
+      id,
+      "REPAYMENT_AUDITOR_PAYLOAD_JSON",
+      "REPAYMENT_AUDITOR_PAYLOAD_JSON"
+    )
+  };
 };
 
 const randomHex32 = (): string => randomBytes(31).toString("hex").padStart(64, "0");
@@ -264,13 +360,17 @@ export const bootstrapDemoFlow = async (
   config: AppConfig,
   db: AppDatabase,
   input: {
+    profile?: string;
     anchorTransactionId?: string;
     account?: string;
     kybStatus?: string;
   } = {}
 ) => {
-  const account = resolveAlpha(config, input.account);
-  const anchorTransactionId = input.anchorTransactionId ?? demoSep31TransactionId();
+  const profile = resolveDemoProfile(config, input);
+  const account = profile.account;
+  const anchorTransactionId =
+    input.anchorTransactionId ??
+    (profile.id === "alpha" ? demoSep31TransactionId() : `sep31-${profile.id}-001`);
   const transaction = createSep31Transaction(config, db, {
     id: anchorTransactionId,
     account,
@@ -288,18 +388,19 @@ export const bootstrapDemoFlow = async (
   });
 
   const customer = await putSep12Customer(config, db, {
-    id: "alpha-kyb-001",
+    id: `${profile.id}-kyb-001`,
     account,
     type: "sep31-sender",
     status: input.kybStatus ?? "ACCEPTED",
     fields: {
-      organization_name: "Alpha Remit",
-      email_address: "ops@alpha-remit.example"
+      organization_name: profile.organizationName,
+      email_address: profile.emailAddress
     }
   });
 
   const state = putStoredState(db, {
     ...getStoredState(db),
+    profileId: profile.id,
     anchorTransactionId,
     updatedAt: nowIso()
   });
@@ -311,12 +412,39 @@ export const bootstrapDemoFlow = async (
     demoReady: {
       sep31Seeded: true,
       sep12Seeded: true,
+      profileId: profile.id,
       participantPolicySynced:
         typeof customer.participantPolicy === "object" &&
         "synced" in customer.participantPolicy &&
         customer.participantPolicy.synced === true
     }
   };
+};
+
+export const resetDemoFlow = async (
+  config: AppConfig,
+  db: AppDatabase,
+  input: {
+    profile?: string;
+    anchorTransactionId?: string;
+    account?: string;
+    kybStatus?: string;
+  } = {}
+) => {
+  const profile = resolveDemoProfile(config, input);
+  const anchorTransactionId = input.anchorTransactionId ?? freshDemoSep31TransactionId(profile.id);
+  putStoredState(db, {
+    ...blankState(),
+    profileId: profile.id,
+    anchorTransactionId
+  });
+  return bootstrapDemoFlow(config, db, {
+    ...input,
+    profile: profile.id,
+    account: profile.account,
+    anchorTransactionId,
+    kybStatus: input.kybStatus ?? "ACCEPTED"
+  });
 };
 
 const publicInputsFromFixture = (fixture: CollateralFixture): string[] => [
@@ -372,6 +500,7 @@ export const getDemoFlowState = (config: AppConfig, db: AppDatabase) => {
         }
       : null,
     artifactStatus: {
+      profileId: state.profileId ?? normalizeProfileId(),
       drawTransferDataXdrConfigured: configured(process.env.DRAW_TRANSFER_DATA_XDR_BASE64),
       repaymentTransferDataXdrConfigured: configured(process.env.REPAYMENT_TRANSFER_DATA_XDR_BASE64),
       creditExecutorConfigured: configured(config.creditExecutorSecretKey),
@@ -385,9 +514,13 @@ export const getDemoFlowState = (config: AppConfig, db: AppDatabase) => {
 export const openDemoCredit = async (
   config: AppConfig,
   db: AppDatabase,
-  input: { quoteId?: string; anchorTransactionId?: string } = {}
+  input: { quoteId?: string; anchorTransactionId?: string; profile?: string } = {}
 ) => {
   const quote = resolveQuote(db, input.quoteId);
+  const profile = resolveDemoProfile(config, {
+    profile: input.profile ?? getStoredState(db).profileId,
+    account: quote.account
+  });
   const anchorTransactionId = resolveAnchorTransactionId(db, {
     anchorTransactionId: input.anchorTransactionId,
     quote
@@ -450,6 +583,7 @@ export const openDemoCredit = async (
 
   const state = putStoredState(db, {
     ...getStoredState(db),
+    profileId: profile.id,
     anchorTransactionId,
     positionId,
     quote,
@@ -473,9 +607,13 @@ export const openDemoCredit = async (
 export const drawDemoCredit = async (
   config: AppConfig,
   db: AppDatabase,
-  input: { anchorTransactionId?: string; positionId?: string } = {}
+  input: { anchorTransactionId?: string; positionId?: string; profile?: string } = {}
 ) => {
   const current = getStoredState(db);
+  const profile = resolveDemoProfile(config, {
+    profile: input.profile ?? current.profileId,
+    account: current.quote?.account
+  });
   const anchorTransactionId = input.anchorTransactionId ?? current.anchorTransactionId ?? undefined;
   const positionId = input.positionId ?? current.positionId;
   if (!positionId) throw new Error("No opened demo position found. Run /api/demo-flow/open first.");
@@ -493,13 +631,14 @@ export const drawDemoCredit = async (
       method: "confidential_transfer_from",
       from: facility,
       to: quote.account,
-      dataXdrBase64: requiredEnv("DRAW_TRANSFER_DATA_XDR_BASE64"),
-      auditorPayload: optionalJsonEnv("DRAW_AUDITOR_PAYLOAD_JSON")
+      dataXdrBase64: profile.drawTransferDataXdrBase64,
+      auditorPayload: profile.drawAuditorPayload
     }
   });
 
   const state = putStoredState(db, {
     ...current,
+    profileId: profile.id,
     anchorTransactionId: anchorTransactionId ?? current.anchorTransactionId,
     positionId,
     quote,
@@ -517,9 +656,13 @@ export const drawDemoCredit = async (
 export const repayDemoCredit = async (
   config: AppConfig,
   db: AppDatabase,
-  input: { anchorTransactionId?: string; positionId?: string } = {}
+  input: { anchorTransactionId?: string; positionId?: string; profile?: string } = {}
 ) => {
   const current = getStoredState(db);
+  const profile = resolveDemoProfile(config, {
+    profile: input.profile ?? current.profileId,
+    account: current.quote?.account
+  });
   const anchorTransactionId = input.anchorTransactionId ?? current.anchorTransactionId ?? undefined;
   const positionId = input.positionId ?? current.positionId;
   if (!positionId) throw new Error("No opened demo position found. Run /api/demo-flow/open first.");
@@ -536,9 +679,10 @@ export const repayDemoCredit = async (
       method: "confidential_transfer",
       from: quote.account,
       to: facility,
-      dataXdrBase64: requiredEnv("REPAYMENT_TRANSFER_DATA_XDR_BASE64"),
+      signerSecretKey: profile.signerSecretKey,
+      dataXdrBase64: profile.repaymentTransferDataXdrBase64,
       mergeBeforeTransfer: process.env.REPAYMENT_MERGE_BEFORE_TRANSFER !== "0",
-      auditorPayload: optionalJsonEnv("REPAYMENT_AUDITOR_PAYLOAD_JSON")
+      auditorPayload: profile.repaymentAuditorPayload
     }
   });
 
@@ -551,6 +695,7 @@ export const repayDemoCredit = async (
 
   const state = putStoredState(db, {
     ...current,
+    profileId: profile.id,
     anchorTransactionId: anchorTransactionId ?? current.anchorTransactionId,
     positionId,
     quote,
@@ -568,9 +713,10 @@ export const repayDemoCredit = async (
 export const proveDemoRepaymentHistory = async (
   config: AppConfig,
   db: AppDatabase,
-  input: { positionId?: string } = {}
+  input: { positionId?: string; profile?: string } = {}
 ) => {
   const current = getStoredState(db);
+  const profileId = normalizeProfileId(input.profile ?? current.profileId);
   const positionId = input.positionId ?? current.positionId;
   if (!positionId) throw new Error("No opened demo position found. Run /api/demo-flow/open first.");
   if (!current.repay) throw new Error("No repaid demo position found. Run /api/demo-flow/repay first.");
@@ -654,6 +800,7 @@ export const proveDemoRepaymentHistory = async (
 
   const state = putStoredState(db, {
     ...current,
+    profileId,
     positionId,
     historyProof,
     updatedAt: nowIso()

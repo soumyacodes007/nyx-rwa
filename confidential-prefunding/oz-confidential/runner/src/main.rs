@@ -189,6 +189,7 @@ struct DelegationState {
 #[derive(Serialize)]
 struct ProofOfLifeReport {
     accounts: BTreeMap<String, String>,
+    account_secrets: BTreeMap<String, String>,
     contracts: DeploymentSet,
     c_usdc_state_views: BTreeMap<String, String>,
     delegation_view: String,
@@ -241,12 +242,14 @@ impl Runner {
         let account_configs = [
             ParticipantConfig { name: "admin", sk: 7 },
             ParticipantConfig { name: "alpha", sk: 11 },
+            ParticipantConfig { name: "beta", sk: 66 },
             ParticipantConfig { name: "facility", sk: 22 },
             ParticipantConfig { name: "auditor", sk: 33 },
             ParticipantConfig { name: "credit-executor", sk: 44 },
         ];
         eprintln!("==> ensuring identities");
         let account_addrs = self.ensure_accounts(&account_configs)?;
+        let account_secrets = self.export_account_secrets(&account_configs)?;
 
         eprintln!("==> building contract WASMs");
         self.build_wasms()?;
@@ -278,6 +281,12 @@ impl Runner {
             .find(|ctx| ctx.name == "cUSDC")
             .cloned()
             .ok_or_else(|| anyhow!("missing cUSDC token context"))?;
+        let demo_anchor_name = env::var("NYX_DEMO_ANCHOR_PROFILE")
+            .unwrap_or_else(|_| "alpha".to_string())
+            .to_lowercase();
+        if !actors.contains_key(&demo_anchor_name) {
+            bail!("unknown NYX_DEMO_ANCHOR_PROFILE={demo_anchor_name}");
+        }
 
         let mut facility = actors
             .remove("facility")
@@ -309,18 +318,18 @@ impl Runner {
             &op_demo_draw_set_spender,
         )?;
 
-        eprintln!("==> privately fund Alpha repayment buffer");
+        eprintln!("==> privately fund {demo_anchor_name} repayment buffer");
         let repayment_buffer_transfer = self.confidential_transfer(
             &c_usdc,
             &mut facility,
-            actors.get_mut("alpha").unwrap(),
+            actors.get_mut(demo_anchor_name.as_str()).unwrap(),
             51_000,
             &account_addrs["facility"],
             &op_demo_repayment_buffer,
             true,
         )?;
-        self.merge(&deployments.cusdc, "alpha")?;
-        actors.get_mut("alpha").unwrap().account_mut(&c_usdc).merge(&self.env);
+        self.merge(&deployments.cusdc, demo_anchor_name.as_str())?;
+        actors.get_mut(demo_anchor_name.as_str()).unwrap().account_mut(&c_usdc).merge(&self.env);
 
         actors.insert("facility".to_string(), facility.clone());
 
@@ -398,16 +407,16 @@ impl Runner {
         facility.account_mut(&c_usdc).merge(&self.env);
 
         let mut demo_facility = facility.clone();
-        let mut demo_alpha = actors
-            .get("alpha")
+        let mut demo_anchor = actors
+            .get(demo_anchor_name.as_str())
             .cloned()
-            .ok_or_else(|| anyhow!("missing alpha actor"))?;
+            .ok_or_else(|| anyhow!("missing demo anchor actor"))?;
         eprintln!("==> export live Nyx draw transfer payload");
         let demo_draw_transfer = self.confidential_transfer_from(
             &c_usdc,
             &mut demo_facility,
             &credit_executor,
-            &mut demo_alpha,
+            &mut demo_anchor,
             50_000,
             &account_addrs["credit-executor"],
             &op_demo_draw,
@@ -416,10 +425,10 @@ impl Runner {
         eprintln!("==> export live Nyx repayment transfer payload");
         let demo_repayment_transfer = self.confidential_transfer(
             &c_usdc,
-            &mut demo_alpha,
+            &mut demo_anchor,
             &mut demo_facility,
             50_142,
-            &account_addrs["alpha"],
+            &account_addrs[demo_anchor_name.as_str()],
             &op_demo_repayment,
             false,
         )?;
@@ -463,6 +472,8 @@ impl Runner {
         eprintln!("==> collect state views and events");
         let confidential_balance_alpha =
             self.view_confidential_balance(&deployments.cusdc, &account_addrs["alpha"])?;
+        let confidential_balance_beta =
+            self.view_confidential_balance(&deployments.cusdc, &account_addrs["beta"])?;
         let confidential_balance_facility =
             self.view_confidential_balance(&deployments.cusdc, &account_addrs["facility"])?;
 
@@ -474,9 +485,11 @@ impl Runner {
 
         let report = ProofOfLifeReport {
             accounts: account_addrs.clone(),
+            account_secrets,
             contracts: deployments.clone(),
             c_usdc_state_views: BTreeMap::from([
                 ("alpha".to_string(), confidential_balance_alpha.clone()),
+                ("beta".to_string(), confidential_balance_beta.clone()),
                 ("facility".to_string(), confidential_balance_facility.clone()),
             ]),
             delegation_view: delegation_view.clone(),
@@ -519,7 +532,8 @@ impl Runner {
                     json!({
                         "amount": "51000",
                         "from": account_addrs["facility"],
-                        "to": account_addrs["alpha"],
+                        "to": account_addrs[demo_anchor_name.as_str()],
+                        "profile": demo_anchor_name.as_str(),
                         "transfer": repayment_buffer_transfer.event_snapshot(),
                         "auditor_decrypt": repayment_buffer_transfer.decrypt_report(&self.env, &account_addrs["auditor"]),
                     }),
@@ -529,8 +543,9 @@ impl Runner {
                     json!({
                         "amount": "50000",
                         "from": account_addrs["facility"],
-                        "to": account_addrs["alpha"],
+                        "to": account_addrs[demo_anchor_name.as_str()],
                         "spender": account_addrs["credit-executor"],
+                        "profile": demo_anchor_name.as_str(),
                         "transfer": demo_draw_transfer.event_snapshot(),
                         "auditor_decrypt": demo_draw_transfer.decrypt_report(&self.env, &account_addrs["auditor"]),
                         "data_xdr_base64": demo_draw_transfer.data_xdr_base64,
@@ -540,8 +555,9 @@ impl Runner {
                     "nyx_live_repayment_artifact".to_string(),
                     json!({
                         "amount": "50142",
-                        "from": account_addrs["alpha"],
+                        "from": account_addrs[demo_anchor_name.as_str()],
                         "to": account_addrs["facility"],
+                        "profile": demo_anchor_name.as_str(),
                         "requires_merge_before_transfer": false,
                         "source_note": "repayment proof spends Alpha's pre-merged private repayment buffer; the draw transfer remains a separate live cUSDC ciphertext",
                         "transfer": demo_repayment_transfer.event_snapshot(),
@@ -1389,6 +1405,21 @@ impl Runner {
                 .trim()
                 .to_string();
             out.insert(cfg.name.to_string(), address);
+        }
+        Ok(out)
+    }
+
+    fn export_account_secrets(
+        &self,
+        configs: &[ParticipantConfig],
+    ) -> Result<BTreeMap<String, String>> {
+        let mut out = BTreeMap::new();
+        for cfg in configs {
+            let secret = self
+                .run_stellar(["keys", "secret", cfg.name], true)?
+                .trim()
+                .to_string();
+            out.insert(cfg.name.to_string(), secret);
         }
         Ok(out)
     }
@@ -2331,6 +2362,7 @@ impl Runner {
     ) -> Result<()> {
         for token in [&deployments.tusdc, &deployments.ttbill, &deployments.txaum] {
             self.mint_public(token, &addrs["alpha"], 10_000, &addrs["admin"])?;
+            self.mint_public(token, &addrs["beta"], 10_000, &addrs["admin"])?;
             self.mint_public(token, &addrs["facility"], 150_000, &addrs["admin"])?;
             self.mint_public(token, &addrs["credit-executor"], 500, &addrs["admin"])?;
         }

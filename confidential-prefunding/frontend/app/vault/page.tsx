@@ -27,7 +27,12 @@ interface DemoState {
   error?: string
   snapshot?: {
     network?: { networkPassphrase?: string }
-    accounts?: { alpha?: string | null; facility?: string | null; auditor?: string | null }
+    accounts?: {
+      alpha?: string | null
+      facility?: string | null
+      auditor?: string | null
+      activeAnchor?: { profileId?: string | null; account?: string | null; transactionId?: string | null }
+    }
     contracts?: Record<string, string>
     product?: { latestSep31Transaction?: { senderId?: string | null } | null }
     dataSources?: {
@@ -163,7 +168,8 @@ function VaultPageInner() {
 
         const alpha = await resolveDemoAlphaAccount(
           API,
-          demoJson?.snapshot?.accounts?.alpha ??
+          demoJson?.snapshot?.accounts?.activeAnchor?.account ??
+            demoJson?.snapshot?.accounts?.alpha ??
             demoJson?.snapshot?.product?.latestSep31Transaction?.senderId
         )
         const collateralToken = demoJson?.snapshot?.contracts?.collateralToken
@@ -250,7 +256,7 @@ function VaultPageInner() {
         <div className="max-w-[1060px] mx-auto px-6 h-full py-6 grid grid-cols-[1fr_320px] gap-5 items-start">
 
           {/* ── Left column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Identity */}
             <div className="flex items-start justify-between flex-shrink-0">
@@ -264,7 +270,7 @@ function VaultPageInner() {
                 <h1 className="text-[26px] font-serif text-[#37322F] leading-tight">
                   Confidential Collateral Vault
                 </h1>
-                <p className="text-[12px] text-[#8a8480] mt-0.5">Alpha Remit · Private RWA reserves</p>
+                <p className="text-[12px] text-[#8a8480] mt-0.5">Beta Remit · Private RWA reserves</p>
               </div>
               <StatusBadge label="Eligible" variant="success" />
             </div>
@@ -373,7 +379,7 @@ function VaultPageInner() {
           </div>
 
           {/* ── Right column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Hidden reserve hero */}
             <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
@@ -396,7 +402,7 @@ function VaultPageInner() {
             </div>
 
             {/* Privacy boundary card — grows */}
-            <div className="flex-1 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase mb-3">
                 Privacy boundary
               </p>
@@ -435,11 +441,11 @@ function VaultPageInner() {
               </div>
             </div>
 
-            {/* Verification drawer */}
-            <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            {/* Verification drawer — shrinks within the column, scrolls inside */}
+            <div className="min-h-0 flex flex-col bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <button
                 onClick={() => setDrawerOpen(!drawerOpen)}
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] transition-colors"
+                className="flex-shrink-0 w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] transition-colors"
               >
                 <span className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase">
                   Verification details
@@ -450,28 +456,43 @@ function VaultPageInner() {
                 }
               </button>
               {drawerOpen && (
-                <div className="border-t border-[rgba(55,50,47,0.08)] px-4 py-3 flex flex-col gap-2.5 max-h-[45vh] overflow-y-auto">
-                  {[
-                    { label: "CollateralPolicyRegistry", value: shortAddr(collateralPolicyAddr) },
-                    { label: "OracleAdapter contract",   value: shortAddr(oracleAdapterAddr) },
+                <div className="min-h-0 border-t border-[rgba(55,50,47,0.08)] px-4 py-2 flex flex-col overflow-y-auto scrollbar-hide">
+                  {([
+                    {
+                      label: "CollateralPolicyRegistry",
+                      value: shortAddr(collateralPolicyAddr),
+                      href: collateralPolicyAddr ? `https://stellar.expert/explorer/testnet/contract/${collateralPolicyAddr}` : undefined,
+                    },
+                    {
+                      label: "OracleAdapter contract",
+                      value: shortAddr(oracleAdapterAddr),
+                      href: oracleAdapterAddr ? `https://stellar.expert/explorer/testnet/contract/${oracleAdapterAddr}` : undefined,
+                    },
+                    {
+                      label: "Collateral token contract",
+                      value: shortAddr(collateralTokenAddr),
+                      href: collateralTokenAddr ? `https://stellar.expert/explorer/testnet/contract/${collateralTokenAddr}` : undefined,
+                    },
                     { label: "Oracle updated ledger",    value: quote?.oracleUpdatedLedger ? String(quote.oracleUpdatedLedger) : "Pending read" },
                     { label: "Policy read status",       value: quote ? "Read from chain" : "Reference values (not yet read)" },
-                  ].map(row => (
-                    <div key={row.label} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-[#a8a29e] font-medium">{row.label}</span>
-                      <span className="text-[11px] font-mono text-[#605A57] break-all">
-                        {row.value}
-                      </span>
+                  ] as { label: string; value: string; href?: string }[]).map(row => (
+                    <div key={row.label} className="flex flex-col gap-[3px] py-2 border-b border-[rgba(55,50,47,0.05)] last:border-0">
+                      <span className="text-[9px] text-[#a8a29e] font-bold uppercase tracking-[0.08em]">{row.label}</span>
+                      {row.href ? (
+                        <a
+                          href={row.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-mono font-medium text-[#1a6042] hover:text-[#14503a] break-all inline-flex items-baseline gap-1 transition-colors"
+                        >
+                          {row.value}
+                          <ArrowUpRight className="w-2.5 h-2.5 flex-shrink-0" />
+                        </a>
+                      ) : (
+                        <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
+                      )}
                     </div>
                   ))}
-                  <a
-                    href={`${API}/api/demo/state`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-0.5 flex items-center gap-1 text-[11px] text-[#605A57] hover:text-[#37322F] transition-colors font-medium"
-                  >
-                    View collateral token {shortAddr(collateralTokenAddr)} <ArrowUpRight className="w-3 h-3" />
-                  </a>
                 </div>
               )}
             </div>

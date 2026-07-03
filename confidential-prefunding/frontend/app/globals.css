@@ -76,6 +76,15 @@
   }
 }
 
+/* Scrollable regions inside fixed-viewport cards: keep scroll, hide the bar */
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 @keyframes drawLine {
   0% {
     transform: scaleX(0);

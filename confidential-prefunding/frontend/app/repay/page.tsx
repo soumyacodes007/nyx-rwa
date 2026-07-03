@@ -124,6 +124,32 @@ function dueDate(tenorDays: number) {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(d)
 }
 
+function explorerUrl(passphrase: string | undefined, kind: "tx" | "contract" | "account", id: string) {
+  const network = passphrase?.toLowerCase().includes("public") ? "public" : "testnet"
+  return `https://stellar.expert/explorer/${network}/${kind}/${id}`
+}
+
+function DrawerRow({ label, value, href }: { label: string; value: string; href?: string }) {
+  return (
+    <div className="flex flex-col gap-[3px] py-2 border-b border-[rgba(55,50,47,0.05)] last:border-0">
+      <span className="text-[9px] text-[#a8a29e] font-bold uppercase tracking-[0.08em]">{label}</span>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11px] font-mono font-medium text-[#1a6042] hover:text-[#14503a] break-all inline-flex items-baseline gap-1 transition-colors"
+        >
+          {value}
+          <ArrowUpRight className="w-2.5 h-2.5 flex-shrink-0" />
+        </a>
+      ) : (
+        <span className="text-[11px] font-mono text-[#605A57] break-all">{value}</span>
+      )}
+    </div>
+  )
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 function RepayPageInner() {
@@ -294,7 +320,7 @@ function RepayPageInner() {
         <div className="max-w-[1060px] mx-auto px-6 h-full py-6 grid grid-cols-[1fr_320px] gap-5 items-start">
 
           {/* ── Left column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Identity */}
             <div className="flex items-start justify-between flex-shrink-0">
@@ -308,7 +334,7 @@ function RepayPageInner() {
                 <h1 className="text-[26px] font-serif text-[#37322F] leading-tight">
                   Repayment
                 </h1>
-                <p className="text-[12px] text-[#8a8480] mt-0.5">Alpha Remit · closing {collateral} position</p>
+                <p className="text-[12px] text-[#8a8480] mt-0.5">Beta Remit · closing {collateral} position</p>
               </div>
               <StatusBadge label={phase === "repaid" ? "Repaid" : "On time"} variant="success" />
             </div>
@@ -366,6 +392,21 @@ function RepayPageInner() {
                           : <StatusBadge label="Ready for proof" variant="warning" />
                       }
                     />
+                    {historyProof?.verified && (
+                      <div className="mt-3 flex items-start gap-2.5 bg-[#1a6042]/[0.06] border border-[#1a6042]/15 rounded-xl px-4 py-3">
+                        <ShieldCheck className="w-4 h-4 text-[#1a6042] flex-shrink-0 mt-[1px]" />
+                        <div>
+                          <p className="text-[12px] font-bold text-[#1a6042] leading-snug">
+                            Private credit record established
+                          </p>
+                          <p className="text-[11px] text-[#605A57] leading-relaxed mt-0.5">
+                            Every on-time cycle compounds this record. Future draws can quote against the
+                            verified history — larger limits, tighter fees — without ever revealing amounts,
+                            dates, or counterparties. Portable to any facility that trusts the verifier.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -441,7 +482,7 @@ function RepayPageInner() {
           </div>
 
           {/* ── Right column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Repayment amount hero */}
             <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
@@ -470,7 +511,7 @@ function RepayPageInner() {
             </div>
 
             {/* Closing checklist — grows */}
-            <div className="flex-1 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase mb-3">
                 Closing checklist
               </p>
@@ -500,12 +541,12 @@ function RepayPageInner() {
               </div>
             </div>
 
-            {/* Verification drawer */}
-            <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            {/* Verification drawer — shrinks within the column, scrolls inside */}
+            <div className="min-h-0 flex flex-col bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <button
                 onClick={() => setDrawerOpen(!drawerOpen)}
                 disabled={phase !== "repaid"}
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="flex-shrink-0 w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <span className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase">
                   Verification details
@@ -516,38 +557,31 @@ function RepayPageInner() {
                 }
               </button>
               {drawerOpen && phase === "repaid" && (
-                <div className="border-t border-[rgba(55,50,47,0.08)] px-4 py-3 flex flex-col gap-2.5 max-h-[45vh] overflow-y-auto">
-                  {[
-                    { label: "Repaid tx hash",              value: shortAddr(flowState?.repay?.txHash) },
-                    { label: "Repayment commitment",        value: shortAddr(flowState?.repay?.repaymentCommitment) },
-                    { label: "Repayment cUSDC tx",           value: shortAddr(flowState?.repay?.confidentialTransferTxHash) },
-                    { label: "Closed ledger",                value: flowState?.repay?.ledger ? String(flowState.repay.ledger) : latestLedger ? String(latestLedger) : "Pending sync" },
-                    { label: "Collateral lock release",     value: "Released" },
-                    { label: "Position ID",                  value: shortAddr(flowState?.positionId) },
-                  ].map(row => (
-                    <div key={row.label} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-[#a8a29e] font-medium">{row.label}</span>
-                      <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
-                    </div>
-                  ))}
-                  {flowState?.repay?.txHash && (
-                    <a
-                      href={`https://stellar.expert/explorer/${(demo?.snapshot?.network?.networkPassphrase ?? "").toLowerCase().includes("public") ? "public" : "testnet"}/tx/${flowState.repay.txHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-0.5 flex items-center gap-1 text-[11px] font-bold text-[#1a6042] hover:text-[#14503a] transition-colors"
-                    >
-                      View repayment transaction on Stellar Expert <ArrowUpRight className="w-3 h-3" />
-                    </a>
-                  )}
-                  <a
-                    href={`${API}/api/demo/state`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-[11px] text-[#605A57] hover:text-[#37322F] transition-colors font-medium"
-                  >
-                    Credit line {shortAddr(creditLineAddr)} · History {shortAddr(repaymentHistoryAddr)} <ArrowUpRight className="w-3 h-3" />
-                  </a>
+                <div className="min-h-0 border-t border-[rgba(55,50,47,0.08)] px-4 py-2 flex flex-col overflow-y-auto scrollbar-hide">
+                  <DrawerRow
+                    label="Repaid tx hash"
+                    value={shortAddr(flowState?.repay?.txHash)}
+                    {...(flowState?.repay?.txHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.repay.txHash) } : {})}
+                  />
+                  <DrawerRow label="Repayment commitment" value={shortAddr(flowState?.repay?.repaymentCommitment)} />
+                  <DrawerRow
+                    label="Repayment cUSDC tx"
+                    value={shortAddr(flowState?.repay?.confidentialTransferTxHash)}
+                    {...(flowState?.repay?.confidentialTransferTxHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.repay.confidentialTransferTxHash) } : {})}
+                  />
+                  <DrawerRow label="Closed ledger" value={flowState?.repay?.ledger ? String(flowState.repay.ledger) : latestLedger ? String(latestLedger) : "Pending sync"} />
+                  <DrawerRow label="Collateral lock release" value="Released" />
+                  <DrawerRow label="Position ID" value={shortAddr(flowState?.positionId)} />
+                  <DrawerRow
+                    label="Credit line contract"
+                    value={shortAddr(creditLineAddr)}
+                    {...(creditLineAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", creditLineAddr) } : {})}
+                  />
+                  <DrawerRow
+                    label="History registry contract"
+                    value={shortAddr(repaymentHistoryAddr)}
+                    {...(repaymentHistoryAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", repaymentHistoryAddr) } : {})}
+                  />
                 </div>
               )}
             </div>

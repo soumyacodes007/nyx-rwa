@@ -100,6 +100,32 @@ function shortNetworkName(passphrase: string | undefined) {
   return "Stellar"
 }
 
+function explorerUrl(passphrase: string | undefined, kind: "tx" | "contract" | "account", id: string) {
+  const network = passphrase?.toLowerCase().includes("public") ? "public" : "testnet"
+  return `https://stellar.expert/explorer/${network}/${kind}/${id}`
+}
+
+function DrawerRow({ label, value, href }: { label: string; value: string; href?: string }) {
+  return (
+    <div className="flex flex-col gap-[3px] py-2 border-b border-[rgba(55,50,47,0.05)] last:border-0">
+      <span className="text-[9px] text-[#a8a29e] font-bold uppercase tracking-[0.08em]">{label}</span>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11px] font-mono font-medium text-[#1a6042] hover:text-[#14503a] break-all inline-flex items-baseline gap-1 transition-colors"
+        >
+          {value}
+          <ArrowUpRight className="w-2.5 h-2.5 flex-shrink-0" />
+        </a>
+      ) : (
+        <span className="text-[11px] font-mono text-[#605A57] break-all">{value}</span>
+      )}
+    </div>
+  )
+}
+
 function formatAmount(value: string) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return value
@@ -252,7 +278,7 @@ function DrawPageInner() {
         <div className="max-w-[1060px] mx-auto px-6 h-full py-6 grid grid-cols-[1fr_320px] gap-5 items-start">
 
           {/* ── Left column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Identity */}
             <div className="flex items-start justify-between flex-shrink-0">
@@ -266,7 +292,7 @@ function DrawPageInner() {
                 <h1 className="text-[26px] font-serif text-[#37322F] leading-tight">
                   Credit Opened &amp; Draw
                 </h1>
-                <p className="text-[12px] text-[#8a8480] mt-0.5">Alpha Remit · {collateral}-backed position</p>
+                <p className="text-[12px] text-[#8a8480] mt-0.5">Beta Remit · {collateral}-backed position</p>
               </div>
               <StatusBadge label={phase === "drawn" ? "Active" : "Ready"} variant={phase === "drawn" ? "success" : "pending"} />
             </div>
@@ -381,7 +407,7 @@ function DrawPageInner() {
           </div>
 
           {/* ── Right column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Draw amount hero */}
             <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
@@ -407,7 +433,7 @@ function DrawPageInner() {
             </div>
 
             {/* Position checklist — grows */}
-            <div className="flex-1 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase mb-3">
                 Position checklist
               </p>
@@ -432,12 +458,12 @@ function DrawPageInner() {
               </div>
             </div>
 
-            {/* Verification drawer */}
-            <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            {/* Verification drawer — shrinks within the column, scrolls inside */}
+            <div className="min-h-0 flex flex-col bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <button
                 onClick={() => setDrawerOpen(!drawerOpen)}
                 disabled={phase !== "drawn"}
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="flex-shrink-0 w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <span className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase">
                   Verification details
@@ -448,38 +474,37 @@ function DrawPageInner() {
                 }
               </button>
               {drawerOpen && phase === "drawn" && (
-                <div className="border-t border-[rgba(55,50,47,0.08)] px-4 py-3 flex flex-col gap-2.5 max-h-[45vh] overflow-y-auto">
-                  {[
-                    { label: "CreditOpened tx hash",          value: shortAddr(flowState?.open?.txHash) },
-                    { label: "DrawExecuted tx hash",          value: shortAddr(flowState?.draw?.txHash) },
-                    { label: "OZ confidential transfer tx",   value: hasRealConfidentialTransfer ? shortAddr(flowState?.draw?.confidentialTransferTxHash) : "Not submitted" },
-                    { label: "Transfer commitment",           value: shortAddr(flowState?.draw?.transferCommitment) },
-                    { label: "Position ID",                   value: shortAddr(flowState?.positionId) },
-                    { label: "Closed / latest ledger",        value: flowState?.draw?.ledger ? String(flowState.draw.ledger) : latestLedger ? String(latestLedger) : "Pending sync" },
-                  ].map(row => (
-                    <div key={row.label} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-[#a8a29e] font-medium">{row.label}</span>
-                      <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
-                    </div>
-                  ))}
-                  {flowState?.draw?.txHash && (
-                    <a
-                      href={`https://stellar.expert/explorer/${(demo?.snapshot?.network?.networkPassphrase ?? "").toLowerCase().includes("public") ? "public" : "testnet"}/tx/${flowState.draw.txHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-0.5 flex items-center gap-1 text-[11px] font-bold text-[#1a6042] hover:text-[#14503a] transition-colors"
-                    >
-                      View draw transaction on Stellar Expert <ArrowUpRight className="w-3 h-3" />
-                    </a>
-                  )}
-                  <a
-                    href={`${API}/api/demo/state`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-[11px] text-[#605A57] hover:text-[#37322F] transition-colors font-medium"
-                  >
-                    Credit line {shortAddr(creditLineAddr)} · cUSDC {shortAddr(cusdcAddr)} <ArrowUpRight className="w-3 h-3" />
-                  </a>
+                <div className="min-h-0 border-t border-[rgba(55,50,47,0.08)] px-4 py-2 flex flex-col overflow-y-auto scrollbar-hide">
+                  <DrawerRow
+                    label="CreditOpened tx hash"
+                    value={shortAddr(flowState?.open?.txHash)}
+                    {...(flowState?.open?.txHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.open.txHash) } : {})}
+                  />
+                  <DrawerRow
+                    label="DrawExecuted tx hash"
+                    value={shortAddr(flowState?.draw?.txHash)}
+                    {...(flowState?.draw?.txHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.draw.txHash) } : {})}
+                  />
+                  <DrawerRow
+                    label="OZ confidential transfer tx"
+                    value={hasRealConfidentialTransfer ? shortAddr(flowState?.draw?.confidentialTransferTxHash) : "Not submitted"}
+                    {...(hasRealConfidentialTransfer && flowState?.draw?.confidentialTransferTxHash
+                      ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.draw.confidentialTransferTxHash) }
+                      : {})}
+                  />
+                  <DrawerRow label="Transfer commitment" value={shortAddr(flowState?.draw?.transferCommitment)} />
+                  <DrawerRow label="Position ID" value={shortAddr(flowState?.positionId)} />
+                  <DrawerRow
+                    label="Credit line contract"
+                    value={shortAddr(creditLineAddr)}
+                    {...(creditLineAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", creditLineAddr) } : {})}
+                  />
+                  <DrawerRow
+                    label="cUSDC contract"
+                    value={shortAddr(cusdcAddr)}
+                    {...(cusdcAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", cusdcAddr) } : {})}
+                  />
+                  <DrawerRow label="Closed / latest ledger" value={flowState?.draw?.ledger ? String(flowState.draw.ledger) : latestLedger ? String(latestLedger) : "Pending sync"} />
                 </div>
               )}
             </div>

@@ -8,16 +8,19 @@ import {
   getDemoFlowState,
   openDemoCredit,
   proveDemoRepaymentHistory,
-  repayDemoCredit
+  repayDemoCredit,
+  resetDemoFlow
 } from "../services/demo-flow.js";
 
 const flowActionSchema = z.object({
+  profile: z.string().min(1).optional(),
   anchorTransactionId: z.string().min(1).optional(),
   quoteId: z.string().min(1).optional(),
   positionId: z.string().min(1).optional()
 });
 
 const bootstrapSchema = z.object({
+  profile: z.string().min(1).optional(),
   anchorTransactionId: z.string().min(1).optional(),
   account: z.string().min(1).optional(),
   kybStatus: z.string().min(1).optional()
@@ -39,6 +42,15 @@ export const registerDemoFlowRoutes = async (
     try {
       const body = bootstrapSchema.parse(request.body ?? {});
       return await bootstrapDemoFlow(config, db, body);
+    } catch (error) {
+      return sendActionError(reply, error);
+    }
+  });
+
+  app.post("/api/demo-flow/reset", async (request, reply) => {
+    try {
+      const body = bootstrapSchema.parse(request.body ?? {});
+      return await resetDemoFlow(config, db, body);
     } catch (error) {
       return sendActionError(reply, error);
     }

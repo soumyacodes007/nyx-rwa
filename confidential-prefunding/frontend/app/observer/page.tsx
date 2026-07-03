@@ -29,7 +29,10 @@ interface DemoState {
   source: "live" | "cache" | "unavailable"
   snapshot?: {
     network?: { networkPassphrase?: string }
-    accounts?: { alpha?: string | null }
+    accounts?: {
+      alpha?: string | null
+      activeAnchor?: { profileId?: string | null; account?: string | null; transactionId?: string | null }
+    }
     contracts?: Record<string, string>
     stellar?: { rpc?: { latestLedgerSequence?: number | null } }
   } | null
@@ -147,6 +150,11 @@ function shortNetworkName(passphrase: string | undefined) {
   if (passphrase.toLowerCase().includes("test")) return "Stellar Testnet"
   if (passphrase.toLowerCase().includes("public")) return "Stellar Public"
   return "Stellar"
+}
+
+function explorerUrl(passphrase: string | undefined, kind: "tx" | "contract" | "account", id: string) {
+  const network = passphrase?.toLowerCase().includes("public") ? "public" : "testnet"
+  return `https://stellar.expert/explorer/${network}/${kind}/${id}`
 }
 
 function formatAmount(value: string) {
@@ -290,7 +298,11 @@ function ObserverPageInner() {
   const tenorDays = quote?.tenorDays ?? 3
   const haircutBps = quote?.haircutBps ?? 1000
   const oraclePriceE7 = quote?.oraclePriceE7 ?? "10000000"
-  const alphaAccount = quote?.account ?? demo?.snapshot?.accounts?.alpha ?? "GXXXXXXXXXXXXXXXXXX"
+  const alphaAccount =
+    quote?.account ??
+    demo?.snapshot?.accounts?.activeAnchor?.account ??
+    demo?.snapshot?.accounts?.alpha ??
+    "GXXXXXXXXXXXXXXXXXX"
 
   // The true collateral balance never reaches this backend — only Alpha's
   // private witness holds it. We show the algebraic minimum implied by the
@@ -506,7 +518,7 @@ function ObserverPageInner() {
                   {isAuditor ? "Auditor View" : "Public Observer"}
                 </p>
                 <h1 className="text-[24px] font-serif text-[#37322F] leading-tight">
-                  Alpha Remit Position
+                  Beta Remit Position
                 </h1>
                 <p className="text-[12px] text-[#8a8480] mt-0.5">{collateral} collateral · same position, different credential</p>
               </div>
@@ -650,7 +662,8 @@ function ObserverPageInner() {
                     Alpha proved ≥{historyProof.threshold} of {historyProof.leafCount} repayments were on time
                   </p>
                   <p className="text-[10px] text-[#a8a29e] leading-relaxed">
-                    Verified on-chain without revealing which repayment was late.
+                    Verified on-chain without revealing which repayment was late. This record compounds —
+                    each cycle strengthens Alpha&apos;s private borrowing capacity for future draws.
                   </p>
                 </div>
               ) : (
@@ -723,11 +736,11 @@ function ObserverPageInner() {
               )}
             </div>
 
-            {/* Verification drawer */}
-            <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            {/* Verification drawer — shrinks within the column, scrolls inside */}
+            <div className="min-h-0 flex flex-col bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <button
                 onClick={() => setDrawerOpen(!drawerOpen)}
-                className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] transition-colors"
+                className="flex-shrink-0 w-full px-4 py-2.5 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] transition-colors"
               >
                 <span className="text-[10px] font-bold text-[#8a8480] tracking-[0.12em] uppercase">
                   Verification details
@@ -735,24 +748,68 @@ function ObserverPageInner() {
                 {drawerOpen ? <ChevronUp className="w-3 h-3 text-[#a8a29e]" /> : <ChevronDown className="w-3 h-3 text-[#a8a29e]" />}
               </button>
               {drawerOpen && (
-                <div className="border-t border-[rgba(55,50,47,0.08)] px-4 py-3 flex flex-col gap-2 max-h-[45vh] overflow-y-auto">
-                  {[
-                    { label: "Verifier contract", value: shortAddr(flowState?.proof?.verifierContractId ?? flow?.contracts?.collateralSufficiencyVerifier) },
-                    { label: "CreditOpened tx", value: shortAddr(flowState?.open?.txHash) },
-                    { label: "DrawExecuted tx", value: shortAddr(flowState?.draw?.txHash) },
-                    { label: "OZ transfer tx", value: flowState?.draw?.confidentialTransferTxHash ? shortAddr(flowState.draw.confidentialTransferTxHash) : "Not yet submitted" },
-                    { label: "Repaid tx", value: shortAddr(flowState?.repay?.txHash) },
+                <div className="min-h-0 border-t border-[rgba(55,50,47,0.08)] px-4 py-2 flex flex-col overflow-y-auto scrollbar-hide">
+                  {([
+                    {
+                      label: "Verifier contract",
+                      value: shortAddr(flowState?.proof?.verifierContractId ?? flow?.contracts?.collateralSufficiencyVerifier),
+                      href: (flowState?.proof?.verifierContractId ?? flow?.contracts?.collateralSufficiencyVerifier)
+                        ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", (flowState?.proof?.verifierContractId ?? flow?.contracts?.collateralSufficiencyVerifier)!)
+                        : undefined,
+                    },
+                    {
+                      label: "CreditOpened tx",
+                      value: shortAddr(flowState?.open?.txHash),
+                      href: flowState?.open?.txHash ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.open.txHash) : undefined,
+                    },
+                    {
+                      label: "DrawExecuted tx",
+                      value: shortAddr(flowState?.draw?.txHash),
+                      href: flowState?.draw?.txHash ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.draw.txHash) : undefined,
+                    },
+                    {
+                      label: "OZ transfer tx",
+                      value: flowState?.draw?.confidentialTransferTxHash ? shortAddr(flowState.draw.confidentialTransferTxHash) : "Not yet submitted",
+                      href: flowState?.draw?.confidentialTransferTxHash ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.draw.confidentialTransferTxHash) : undefined,
+                    },
+                    {
+                      label: "Repaid tx",
+                      value: shortAddr(flowState?.repay?.txHash),
+                      href: flowState?.repay?.txHash ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.repay.txHash) : undefined,
+                    },
                     ...(historyProof?.verified ? [
-                      { label: "History verify tx", value: shortAddr(historyProof.txHash) },
+                      {
+                        label: "History verify tx",
+                        value: shortAddr(historyProof.txHash),
+                        href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", historyProof.txHash),
+                      },
                       { label: "History proof nullifier", value: shortAddr(historyProof.proofNullifier) },
                       { label: "History root", value: shortAddr(historyProof.historyRoot) },
-                      { label: "History verifier contract", value: shortAddr(historyProof.verifierContractId ?? flow?.contracts?.repaymentHistoryVerifier) },
+                      {
+                        label: "History verifier contract",
+                        value: shortAddr(historyProof.verifierContractId ?? flow?.contracts?.repaymentHistoryVerifier),
+                        href: (historyProof.verifierContractId ?? flow?.contracts?.repaymentHistoryVerifier)
+                          ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", (historyProof.verifierContractId ?? flow?.contracts?.repaymentHistoryVerifier)!)
+                          : undefined,
+                      },
                     ] : []),
                     { label: "Latest ledger", value: latestLedger ? String(latestLedger) : "Pending sync" },
-                  ].map(row => (
-                    <div key={row.label} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-[#a8a29e] font-medium">{row.label}</span>
-                      <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
+                  ] as { label: string; value: string; href?: string }[]).map(row => (
+                    <div key={row.label} className="flex flex-col gap-[3px] py-2 border-b border-[rgba(55,50,47,0.05)] last:border-0">
+                      <span className="text-[9px] text-[#a8a29e] font-bold uppercase tracking-[0.08em]">{row.label}</span>
+                      {row.href ? (
+                        <a
+                          href={row.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-mono font-medium text-[#1a6042] hover:text-[#14503a] break-all inline-flex items-baseline gap-1 transition-colors"
+                        >
+                          {row.value}
+                          <ArrowUpRight className="w-2.5 h-2.5 flex-shrink-0" />
+                        </a>
+                      ) : (
+                        <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
+                      )}
                     </div>
                   ))}
                 </div>

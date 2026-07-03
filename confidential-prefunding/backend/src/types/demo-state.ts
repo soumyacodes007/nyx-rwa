@@ -12,6 +12,11 @@ export type DemoState = {
     alpha: string | null;
     facility: string | null;
     auditor: string | null;
+    activeAnchor: {
+      profileId: string | null;
+      account: string | null;
+      transactionId: string | null;
+    };
     missing: string[];
   };
   anchorPlatform: {

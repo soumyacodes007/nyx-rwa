@@ -31,7 +31,10 @@ interface DemoState {
   source: "live" | "cache" | "unavailable"
   snapshot?: {
     network?: { networkPassphrase?: string }
-    accounts?: { alpha?: string | null }
+    accounts?: {
+      alpha?: string | null
+      activeAnchor?: { profileId?: string | null; account?: string | null; transactionId?: string | null }
+    }
     contracts?: Record<string, string>
     stellar?: { rpc?: { latestLedgerSequence?: number | null } }
     product?: {
@@ -238,9 +241,9 @@ function dueDate(tenorDays: number) {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(d)
 }
 
-function explorerTxUrl(passphrase: string | undefined, hash: string) {
+function explorerUrl(passphrase: string | undefined, kind: "tx" | "contract" | "account", id: string) {
   const network = passphrase?.toLowerCase().includes("public") ? "public" : "testnet"
-  return `https://stellar.expert/explorer/${network}/tx/${hash}`
+  return `https://stellar.expert/explorer/${network}/${kind}/${id}`
 }
 
 // Public inputs layout (see demo-flow fixture): 9 × 32-byte fields —
@@ -293,7 +296,9 @@ function CreditPageInner() {
     load()
   }, [API])
 
+  const activeAnchor = demo?.snapshot?.accounts?.activeAnchor
   const alpha =
+    activeAnchor?.account ??
     demo?.snapshot?.accounts?.alpha ??
     demo?.snapshot?.product?.latestSep31Transaction?.senderId
   const collateralToken = demo?.snapshot?.contracts?.collateralToken
@@ -339,7 +344,9 @@ function CreditPageInner() {
       const resolved = await resolveDemoAlphaAccount(API, alpha)
       const quoteAccount = resolved.account
       const anchorTransactionId =
-        demo?.snapshot?.product?.latestSep31Transaction?.id ?? resolved.anchorTransactionId
+        activeAnchor?.transactionId ??
+        demo?.snapshot?.product?.latestSep31Transaction?.id ??
+        resolved.anchorTransactionId
 
       if (!quoteAccount || !collateralToken) throw new Error("Alpha account or collateral token not configured")
       const res = await fetch(`${API}/api/prefunding/quote`, {
@@ -399,7 +406,10 @@ function CreditPageInner() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           quoteId: quote.id,
-          anchorTransactionId: quote.anchorTransactionId ?? demo?.snapshot?.product?.latestSep31Transaction?.id,
+          anchorTransactionId:
+            quote.anchorTransactionId ??
+            activeAnchor?.transactionId ??
+            demo?.snapshot?.product?.latestSep31Transaction?.id,
         }),
       })
       const body = await res.json()
@@ -488,7 +498,7 @@ function CreditPageInner() {
                 <h1 className="text-[26px] font-serif text-[#37322F] leading-tight">
                   Private Prefunding Request
                 </h1>
-                <p className="text-[12px] text-[#8a8480] mt-0.5">Alpha Remit · {selectedAsset} collateral</p>
+                <p className="text-[12px] text-[#8a8480] mt-0.5">Beta Remit · {selectedAsset} collateral</p>
               </div>
               {phase !== "input" && (
                 <StatusBadge label={eligible ? "Eligible" : "Ineligible"} variant={eligible ? "success" : "danger"} />
@@ -734,7 +744,7 @@ function CreditPageInner() {
           </div>
 
           {/* ── Right column ── */}
-          <div className="h-full flex flex-col gap-4">
+          <div className="h-full flex flex-col gap-4 min-h-0">
 
             {/* Proof status hero */}
             <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
@@ -777,8 +787,8 @@ function CreditPageInner() {
               </div>
             </div>
 
-            {/* Proof pipeline stepper — grows */}
-            <div className="flex-1 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            {/* Proof pipeline stepper — grows, yields space when drawer opens */}
+            <div className="flex-1 min-h-0 overflow-hidden bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase mb-3">
                 Proof pipeline
               </p>
@@ -813,12 +823,12 @@ function CreditPageInner() {
               </div>
             </div>
 
-            {/* Verification drawer */}
-            <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
+            {/* Verification drawer — shrinks within the column, scrolls inside */}
+            <div className="min-h-0 flex flex-col bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <button
                 onClick={() => setDrawerOpen(!drawerOpen)}
                 disabled={phase !== "verified"}
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="flex-shrink-0 w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <span className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase">
                   Verification details
@@ -829,11 +839,21 @@ function CreditPageInner() {
                 }
               </button>
               {drawerOpen && phase === "verified" && (
-                <div className="border-t border-[rgba(55,50,47,0.08)] px-4 py-3 flex flex-col gap-2.5 max-h-[45vh] overflow-y-auto">
-                  {[
+                <div className="min-h-0 border-t border-[rgba(55,50,47,0.08)] px-4 py-2 flex flex-col overflow-y-auto scrollbar-hide">
+                  {([
                     { label: "Proof system",        value: "Noir + UltraHonk" },
-                    { label: "Verifier contract",   value: shortAddr(proof?.verifierContractId ?? verifierContract) },
-                    { label: "Proof job",           value: proof?.jobId ?? "Pending" },
+                    {
+                      label: "Verifier contract",
+                      value: shortAddr(proof?.verifierContractId ?? verifierContract),
+                      href: (proof?.verifierContractId ?? verifierContract)
+                        ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", proof?.verifierContractId ?? verifierContract!)
+                        : undefined,
+                    },
+                    {
+                      label: "Proof job",
+                      value: proof?.jobId ?? "Pending",
+                      href: proof?.jobId ? `${API}/api/proof/${proof.jobId}` : undefined,
+                    },
                     {
                       label: "Proof",
                       value: proof?.proofHex
@@ -843,32 +863,30 @@ function CreditPageInner() {
                     { label: "Position nullifier",  value: shortAddr(nullifierFromPublicInputs(proof?.publicInputsHex)) },
                     { label: "Public inputs",       value: shortAddr(proof?.publicInputsHex) },
                     { label: "Position ID",         value: shortAddr(positionId) },
-                    { label: "Open tx hash",        value: shortAddr(openTx?.txHash) },
+                    {
+                      label: "Open tx hash",
+                      value: shortAddr(openTx?.txHash),
+                      href: openTx?.txHash ? explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", openTx.txHash) : undefined,
+                    },
                     { label: "Opened ledger",       value: openTx?.ledger ? String(openTx.ledger) : latestLedger ? String(latestLedger) : "Pending sync" },
-                  ].map(row => (
-                    <div key={row.label} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-[#a8a29e] font-medium">{row.label}</span>
-                      <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
+                  ] as { label: string; value: string; href?: string }[]).map(row => (
+                    <div key={row.label} className="flex flex-col gap-[3px] py-2 border-b border-[rgba(55,50,47,0.05)] last:border-0">
+                      <span className="text-[9px] text-[#a8a29e] font-bold uppercase tracking-[0.08em]">{row.label}</span>
+                      {row.href ? (
+                        <a
+                          href={row.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-mono font-medium text-[#1a6042] hover:text-[#14503a] break-all inline-flex items-baseline gap-1 transition-colors"
+                        >
+                          {row.value}
+                          <ArrowUpRight className="w-2.5 h-2.5 flex-shrink-0" />
+                        </a>
+                      ) : (
+                        <span className="text-[11px] font-mono text-[#605A57] break-all">{row.value}</span>
+                      )}
                     </div>
                   ))}
-                  {openTx?.txHash && (
-                    <a
-                      href={explorerTxUrl(demo?.snapshot?.network?.networkPassphrase, openTx.txHash)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-0.5 flex items-center gap-1 text-[11px] font-bold text-[#1a6042] hover:text-[#14503a] transition-colors"
-                    >
-                      View transaction on Stellar Expert <ArrowUpRight className="w-3 h-3" />
-                    </a>
-                  )}
-                  <a
-                    href={`${API}/api/proof/${proof?.jobId ?? ""}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-[11px] text-[#605A57] hover:text-[#37322F] transition-colors font-medium"
-                  >
-                    View full proof artifact <ArrowUpRight className="w-3 h-3" />
-                  </a>
                 </div>
               )}
             </div>
