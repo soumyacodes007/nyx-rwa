@@ -2,6 +2,8 @@
 
 Nyx is a private prefunding credit system for institutional Stellar anchors. It lets an anchor use confidential tokenized collateral to unlock short-term stablecoin liquidity for a real payout need, without revealing reserve size, draw amount, repayment amount, or credit capacity to the public.
 
+Demo video: https://www.youtube.com/watch?v=-wNmBygVal8&t=1s
+
 The demo target is a two-browser institutional story:
 
 - Left browser: Alpha Remit, the anchor operator requesting private prefunding.
