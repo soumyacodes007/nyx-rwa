@@ -479,6 +479,9 @@ function ObserverPageInner() {
             </div>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
+            <Link href="/docs" className="text-[11px] font-medium text-[#8a8480] hover:text-[#37322F] transition-colors">Docs</Link>
+            <Link href="/compliance" className="text-[11px] font-medium text-[#8a8480] hover:text-[#37322F] transition-colors">Compliance</Link>
+            <span className="w-[1px] h-3.5 bg-[rgba(55,50,47,0.15)]" />
             <span className="flex items-center gap-1.5 text-[11px] text-[#8a8480] whitespace-nowrap">
               {isLive ? <Wifi className="w-3 h-3 text-[#1a6042] flex-shrink-0" /> : <span className="w-1.5 h-1.5 rounded-full bg-[#a8a29e] flex-shrink-0" />}
               {networkName}

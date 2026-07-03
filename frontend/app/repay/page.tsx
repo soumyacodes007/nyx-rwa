@@ -9,14 +9,16 @@ import {
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
-  Wallet,
+  Receipt,
   Lock,
+  LockOpen,
   Loader2,
   CheckCircle2,
   Circle,
+  RefreshCw,
   Wifi,
   WifiOff,
-  RefreshCw,
+  ShieldCheck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -35,12 +37,22 @@ interface DemoFlowState {
   state: {
     anchorTransactionId: string | null
     positionId: string | null
-    open: { txHash: string; ledger?: number | null } | null
     draw: {
       txHash: string
-      ledger?: number | null
       confidentialTransferTxHash: string | null
-      transferCommitment: string
+    } | null
+    repay: {
+      txHash: string
+      ledger?: number | null
+      repaymentCommitment: string
+      confidentialTransferTxHash: string | null
+    } | null
+    historyProof: {
+      verified: boolean
+      threshold: number
+      onTimeCount: number
+      leafCount: number
+      txHash: string
     } | null
   }
   anchorTransaction: {
@@ -50,7 +62,7 @@ interface DemoFlowState {
   } | null
 }
 
-type Phase = "ready" | "drawing" | "drawn"
+type Phase = "outstanding" | "repaying" | "repaid"
 
 // ─── Shared components (same pattern as prior pages) ─────────────────────────
 
@@ -100,6 +112,18 @@ function shortNetworkName(passphrase: string | undefined) {
   return "Stellar"
 }
 
+function formatAmount(value: string) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return value
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(numeric)
+}
+
+function dueDate(tenorDays: number) {
+  const d = new Date()
+  d.setDate(d.getDate() + tenorDays)
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(d)
+}
+
 function explorerUrl(passphrase: string | undefined, kind: "tx" | "contract" | "account", id: string) {
   const network = passphrase?.toLowerCase().includes("public") ? "public" : "testnet"
   return `https://stellar.expert/explorer/${network}/${kind}/${id}`
@@ -126,28 +150,25 @@ function DrawerRow({ label, value, href }: { label: string; value: string; href?
   )
 }
 
-function formatAmount(value: string) {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return value
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(numeric)
-}
-
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-function DrawPageInner() {
+function RepayPageInner() {
   const params = useSearchParams()
-  const amount = params.get("amount") ?? "50000"
-  const tenor = params.get("tenor") ?? "3"
-  const fee = params.get("fee") ?? "175"
+  const amount = Number(params.get("amount") ?? "50000")
+  const fee = Number(params.get("fee") ?? "175")
+  const tenor = Number(params.get("tenor") ?? "3")
   const collateral = params.get("collateral") ?? "cTBill"
   const queryPositionId = params.get("positionId")
+  const outstanding = String(amount + fee)
 
   const [demo, setDemo] = useState<DemoState | null>(null)
   const [flow, setFlow] = useState<DemoFlowState | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [phase, setPhase] = useState<Phase>("ready")
+  const [phase, setPhase] = useState<Phase>("outstanding")
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [historyProofing, setHistoryProofing] = useState(false)
+  const [historyProofError, setHistoryProofError] = useState<string | null>(null)
 
   const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001"
 
@@ -161,7 +182,7 @@ function DrawPageInner() {
       if (flowRes.ok) {
         const flowJson = await flowRes.json() as DemoFlowState
         setFlow(flowJson)
-        if (flowJson.state.draw) setPhase("drawn")
+        if (flowJson.state.repay) setPhase("repaid")
       }
       if (!demoRes.ok || !flowRes.ok) setError("Backend state unavailable")
     } catch {
@@ -187,18 +208,18 @@ function DrawPageInner() {
   const isLive = demo?.source === "live"
   const networkName = shortNetworkName(demo?.snapshot?.network?.networkPassphrase)
   const creditLineAddr = demo?.snapshot?.contracts?.prefundingCreditLine
-  const cusdcAddr = demo?.snapshot?.contracts?.confidentialCusdc
+  const repaymentHistoryAddr = demo?.snapshot?.contracts?.repaymentHistory
   const latestLedger = demo?.snapshot?.stellar?.rpc?.latestLedgerSequence
   const flowState = flow?.state
-  const hasRealConfidentialTransfer = Boolean(flowState?.draw?.confidentialTransferTxHash)
-  const sepStatus = flow?.anchorTransaction?.sepStatus ?? (phase === "drawn" ? "pending_stellar" : "pending_sender")
-  const productStatus = flow?.anchorTransaction?.productStatus ?? (phase === "drawn" ? "credit_drawn" : "proof_verified")
+  const historyProof = flowState?.historyProof
+  const sepStatus = flow?.anchorTransaction?.sepStatus ?? (phase === "repaid" ? "completed" : "pending_stellar")
+  const productStatus = flow?.anchorTransaction?.productStatus ?? (phase === "repaid" ? "repaid" : "credit_drawn")
 
-  async function runDraw() {
-    setPhase("drawing")
+  async function runRepay() {
+    setPhase("repaying")
     setError(null)
     try {
-      const res = await fetch(`${API}/api/demo-flow/draw`, {
+      const res = await fetch(`${API}/api/demo-flow/repay`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -207,20 +228,41 @@ function DrawPageInner() {
         }),
       })
       const body = await res.json()
-      if (!res.ok) throw new Error(body.error ?? "Draw failed")
+      if (!res.ok) throw new Error(body.error ?? "Repayment failed")
       setFlow(await (await fetch(`${API}/api/demo-flow/state`)).json())
-      setPhase("drawn")
+      setPhase("repaid")
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-      setPhase("ready")
+      setPhase("outstanding")
+    }
+  }
+
+  async function runHistoryProof() {
+    setHistoryProofing(true)
+    setHistoryProofError(null)
+    try {
+      const res = await fetch(`${API}/api/demo-flow/history-proof`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          positionId: queryPositionId || flowState?.positionId || undefined,
+        }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error ?? "Repayment history proof failed")
+      setFlow(await (await fetch(`${API}/api/demo-flow/state`)).json())
+    } catch (e) {
+      setHistoryProofError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setHistoryProofing(false)
     }
   }
 
   const checklist = [
-    { label: "Credit line", done: true },
-    { label: "Collateral lock", done: true },
-    { label: "Proof status", done: true },
-    { label: "Draw status", done: phase === "drawn" },
+    { label: "Repayment", done: phase === "repaid" },
+    { label: "SEP-31 completed", done: phase === "repaid" },
+    { label: "Collateral lock released", done: phase === "repaid" },
+    { label: "Repayment history", done: Boolean(historyProof?.verified), updating: false },
   ]
 
   return (
@@ -239,7 +281,7 @@ function DrawPageInner() {
             </Link>
             <span className="w-[1px] h-3.5 bg-[rgba(55,50,47,0.15)]" />
             <span className="text-[11px] font-medium text-[#8a8480] tracking-[0.1em] uppercase">
-              Credit Opened &amp; Draw
+              Repayment
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -250,12 +292,15 @@ function DrawPageInner() {
             )}
             <button
               onClick={refresh}
-              disabled={loading || phase === "drawing"}
+              disabled={loading || phase === "repaying" || historyProofing}
               title="Refresh data"
               className="w-6 h-6 rounded-full flex items-center justify-center text-[#8a8480] hover:text-[#37322F] hover:bg-[rgba(55,50,47,0.06)] disabled:opacity-40 transition-colors"
             >
               <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
             </button>
+            <Link href="/docs" className="text-[11px] font-medium text-[#8a8480] hover:text-[#37322F] transition-colors">Docs</Link>
+            <Link href="/compliance" className="text-[11px] font-medium text-[#8a8480] hover:text-[#37322F] transition-colors">Compliance</Link>
+            <span className="w-[1px] h-3.5 bg-[rgba(55,50,47,0.15)]" />
             <span className="flex items-center gap-1.5 text-[11px] text-[#8a8480]">
               {isLive ? <Wifi className="w-3 h-3 text-[#1a6042]" /> : <span className="w-1.5 h-1.5 rounded-full bg-[#a8a29e]" />}
               {networkName}
@@ -263,7 +308,7 @@ function DrawPageInner() {
             <span className="w-[1px] h-3.5 bg-[rgba(55,50,47,0.15)]" />
             <div className="flex items-center gap-1.5 text-[11px] text-[#8a8480]">
               <span className="font-mono">SEP-31</span>
-              <StatusBadge label={sepStatus.replace(/_/g, " ")} variant="warning" />
+              <StatusBadge label={sepStatus.replace(/_/g, " ")} variant={phase === "repaid" ? "success" : "warning"} />
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-[#8a8480]">
               <span>Nyx</span>
@@ -284,17 +329,17 @@ function DrawPageInner() {
             <div className="flex items-start justify-between flex-shrink-0">
               <div>
                 <Link
-                  href="/credit"
+                  href="/draw"
                   className="inline-flex items-center gap-1 text-[10px] font-medium text-[#a8a29e] hover:text-[#605A57] tracking-[0.1em] uppercase mb-1 transition-colors"
                 >
-                  <ArrowLeft className="w-3 h-3" /> Prefunding Request
+                  <ArrowLeft className="w-3 h-3" /> Credit Opened &amp; Draw
                 </Link>
                 <h1 className="text-[26px] font-serif text-[#37322F] leading-tight">
-                  Credit Opened &amp; Draw
+                  Repayment
                 </h1>
-                <p className="text-[12px] text-[#8a8480] mt-0.5">Beta Remit · {collateral}-backed position</p>
+                <p className="text-[12px] text-[#8a8480] mt-0.5">Beta Remit · closing {collateral} position</p>
               </div>
-              <StatusBadge label={phase === "drawn" ? "Active" : "Ready"} variant={phase === "drawn" ? "success" : "pending"} />
+              <StatusBadge label={phase === "repaid" ? "Repaid" : "On time"} variant="success" />
             </div>
 
             {/* Main card — grows to fill */}
@@ -304,18 +349,18 @@ function DrawPageInner() {
               <div className="flex-shrink-0 px-5 py-3.5 border-b border-[rgba(55,50,47,0.08)] flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-7 h-7 rounded-lg bg-[rgba(55,50,47,0.06)] flex items-center justify-center flex-shrink-0">
-                    <Wallet className="w-3.5 h-3.5 text-[#605A57]" />
+                    <Receipt className="w-3.5 h-3.5 text-[#605A57]" />
                   </div>
                   <div>
                     <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.1em] uppercase">
                       Position
                     </p>
                     <p className="text-[12px] font-mono text-[#37322F] font-medium leading-tight">
-                      {formatAmount(amount)} cUSDC · {tenor}d
+                      {formatAmount(String(amount))} cUSDC · {tenor}d
                     </p>
                   </div>
                 </div>
-                <StatusBadge label={phase === "drawn" ? "Drawn" : "Verified"} variant="success" />
+                <StatusBadge label={phase === "repaid" ? "Closed" : "Active"} variant={phase === "repaid" ? "success" : "warning"} />
               </div>
 
               {/* Body */}
@@ -329,29 +374,42 @@ function DrawPageInner() {
                       </div>
                     ))}
                   </div>
-                ) : phase !== "drawn" ? (
+                ) : phase !== "repaid" ? (
                   <div>
-                    <MetricRow label="Credit line" badge={<StatusBadge label="Open" variant="success" />} />
+                    <MetricRow label="Outstanding repayment" value={`${formatAmount(outstanding)} cUSDC`} />
+                    <MetricRow label="Due date" value={dueDate(tenor)} />
+                    <MetricRow label="Status" badge={<StatusBadge label="On time" variant="success" />} />
                     <MetricRow label="Collateral lock" badge={<StatusBadge label="Active" variant="success" />} />
-                    <MetricRow label="Proof status" badge={<StatusBadge label="Verified" variant="success" />} />
-                    <MetricRow
-                      label="Draw status"
-                      badge={<StatusBadge label={phase === "drawing" ? "Drawing" : "Ready"} variant={phase === "drawing" ? "warning" : "pending"} />}
-                    />
                   </div>
                 ) : (
                   <div>
+                    <MetricRow label="Repayment" badge={<StatusBadge label="Confirmed" variant="success" />} />
+                    <MetricRow label="SEP Status" badge={<StatusBadge label="completed" variant="success" />} />
+                    <MetricRow label="Product Status" badge={<StatusBadge label="repaid" variant="pending" />} />
+                    <MetricRow label="Collateral lock" badge={<StatusBadge label="Released" variant="success" />} />
                     <MetricRow
-                      label={hasRealConfidentialTransfer ? "cUSDC released" : "Draw intent"}
-                      badge={<StatusBadge label={hasRealConfidentialTransfer ? "Complete" : "Recorded"} variant="success" />}
+                      label="Repayment history"
+                      badge={
+                        historyProof?.verified
+                          ? <StatusBadge label={`≥${historyProof.threshold}/${historyProof.leafCount} verified`} variant="success" />
+                          : <StatusBadge label="Ready for proof" variant="warning" />
+                      }
                     />
-                    <MetricRow
-                      label="Confidential transfer"
-                      badge={<StatusBadge label={hasRealConfidentialTransfer ? "Confirmed" : "Pending"} variant={hasRealConfidentialTransfer ? "success" : "warning"} />}
-                    />
-                    <MetricRow label="Collateral lock" badge={<StatusBadge label="Active" variant="success" />} />
-                    <MetricRow label="SEP Status" badge={<StatusBadge label="pending stellar" variant="warning" />} />
-                    <MetricRow label="Product Status" badge={<StatusBadge label="credit drawn" variant="pending" />} />
+                    {historyProof?.verified && (
+                      <div className="mt-3 flex items-start gap-2.5 bg-[#1a6042]/[0.06] border border-[#1a6042]/15 rounded-xl px-4 py-3">
+                        <ShieldCheck className="w-4 h-4 text-[#1a6042] flex-shrink-0 mt-[1px]" />
+                        <div>
+                          <p className="text-[12px] font-bold text-[#1a6042] leading-snug">
+                            Private credit record established
+                          </p>
+                          <p className="text-[11px] text-[#605A57] leading-relaxed mt-0.5">
+                            Every on-time cycle compounds this record. Future draws can quote against the
+                            verified history — larger limits, tighter fees — without ever revealing amounts,
+                            dates, or counterparties. Portable to any facility that trusts the verifier.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -359,27 +417,38 @@ function DrawPageInner() {
               {/* Card footer */}
               <div className="flex-shrink-0 px-5 py-4 border-t border-[rgba(55,50,47,0.08)] flex items-center justify-between gap-3">
                 <p className="text-[11px] text-[#a8a29e] max-w-[300px] leading-relaxed">
-                  {phase === "ready" && "Draws a confidential cUSDC transfer to Alpha under on-chain authorization."}
-                  {phase === "drawing" && "Submitting confidential transfer and recording draw on-chain."}
-                  {phase === "drawn" && !hasRealConfidentialTransfer && "Draw recorded without live cUSDC transfer evidence. Do not claim cUSDC moved."}
-                  {phase === "drawn" && hasRealConfidentialTransfer && "Position active. Collateral remains locked until repayment."}
+                  {phase === "outstanding" && "Repaying releases the collateral lock and feeds the private repayment history."}
+                  {phase === "repaying" && "Submitting repayment and closing the credit position."}
+                  {phase === "repaid" && !historyProof?.verified && !historyProofError &&
+                    "Position closed. Prove your repayment track record without revealing amounts or dates."}
+                  {phase === "repaid" && historyProofError && (
+                    <span className="text-[#9a2c1a]">{historyProofError}</span>
+                  )}
+                  {phase === "repaid" && historyProof?.verified && (
+                    <>
+                      History proven on-chain — ≥{historyProof.threshold} of {historyProof.leafCount} on time.{" "}
+                      <Link href="/anchor" className="underline hover:text-[#605A57] transition-colors">
+                        Start a new payout
+                      </Link>
+                    </>
+                  )}
                 </p>
 
-                {phase === "ready" && (
+                {phase === "outstanding" && (
                   <button
-                    onClick={runDraw}
+                    onClick={runRepay}
                     className="relative overflow-hidden inline-flex items-center gap-2 bg-[#37322F] text-white text-[13px] font-medium px-5 py-2.5 rounded-full flex-shrink-0
                       shadow-[0px_0px_0px_2px_rgba(255,255,255,0.08)_inset]
                       hover:bg-[#23201E] hover:scale-[1.02] active:scale-[0.97]
                       transition-all duration-200"
                   >
                     <span className="absolute inset-0 bg-gradient-to-b from-white/0 to-black/10 mix-blend-multiply pointer-events-none" />
-                    Draw {formatAmount(amount)} cUSDC
+                    Repay credit line
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 )}
 
-                {phase === "drawing" && (
+                {phase === "repaying" && (
                   <button
                     disabled
                     className="inline-flex items-center gap-2 bg-[#37322F]/60 text-white text-[13px] font-medium px-5 py-2.5 rounded-full flex-shrink-0 cursor-not-allowed"
@@ -389,18 +458,27 @@ function DrawPageInner() {
                   </button>
                 )}
 
-                {phase === "drawn" && (
-                  <Link
-                    href={`/repay?amount=${amount}&tenor=${tenor}&fee=${fee}&collateral=${collateral}&positionId=${flowState?.positionId ?? queryPositionId ?? ""}`}
+                {phase === "repaid" && !historyProof?.verified && (
+                  <button
+                    onClick={runHistoryProof}
+                    disabled={historyProofing}
                     className="relative overflow-hidden inline-flex items-center gap-2 bg-[#37322F] text-white text-[13px] font-medium px-5 py-2.5 rounded-full flex-shrink-0
                       shadow-[0px_0px_0px_2px_rgba(255,255,255,0.08)_inset]
                       hover:bg-[#23201E] hover:scale-[1.02] active:scale-[0.97]
+                      disabled:opacity-60 disabled:hover:scale-100
                       transition-all duration-200"
                   >
                     <span className="absolute inset-0 bg-gradient-to-b from-white/0 to-black/10 mix-blend-multiply pointer-events-none" />
-                    Continue to repayment
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+                    {historyProofing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                    {historyProofing ? "Proving history..." : "Prove repayment history"}
+                  </button>
+                )}
+
+                {phase === "repaid" && historyProof?.verified && (
+                  <span className="inline-flex items-center gap-2 text-[#1a6042] text-[13px] font-medium px-2 flex-shrink-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Closed
+                  </span>
                 )}
               </div>
             </div>
@@ -409,33 +487,36 @@ function DrawPageInner() {
           {/* ── Right column ── */}
           <div className="h-full flex flex-col gap-4 min-h-0">
 
-            {/* Draw amount hero */}
+            {/* Repayment amount hero */}
             <div className="flex-shrink-0 bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase mb-2.5">
-                Draw amount
+                {phase === "repaid" ? "Repayment amount" : "Outstanding repayment"}
               </p>
               <div className="flex items-end justify-between mb-3">
                 <div>
                   <span className="text-[24px] font-serif text-[#37322F] leading-none block">
-                    {formatAmount(amount)}
+                    {formatAmount(outstanding)}
                   </span>
-                  <span className="text-[11px] text-[#8a8480] font-medium">cUSDC · {tenor}-day tenor</span>
+                  <span className="text-[11px] text-[#8a8480] font-medium">cUSDC · due {dueDate(tenor)}</span>
                 </div>
               </div>
               <div className="w-full h-[1px] bg-[rgba(55,50,47,0.08)] mb-3" />
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-[#a8a29e]">Facility</span>
+                <span className="text-[11px] text-[#a8a29e]">Collateral</span>
                 <span className="text-[11px] text-[#37322F] font-medium flex items-center gap-1">
-                  <Lock className="w-3 h-3 text-[#1a6042]" />
-                  {phase === "drawn" ? "Released" : "Ready"}
+                  {phase === "repaid" ? (
+                    <><LockOpen className="w-3 h-3 text-[#1a6042]" /> Released</>
+                  ) : (
+                    <><Lock className="w-3 h-3 text-[#92400e]" /> Locked</>
+                  )}
                 </span>
               </div>
             </div>
 
-            {/* Position checklist — grows */}
+            {/* Closing checklist — grows */}
             <div className="flex-1 min-h-0 overflow-hidden bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl p-4 shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <p className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase mb-3">
-                Position checklist
+                Closing checklist
               </p>
               <div className="flex flex-col">
                 {checklist.map((item, i, arr) => (
@@ -444,13 +525,18 @@ function DrawPageInner() {
                       <div className="absolute left-[8px] top-[26px] w-[1px] h-[calc(100%-10px)] bg-[rgba(55,50,47,0.10)]" />
                     )}
                     <div className="w-[17px] h-[17px] flex-shrink-0 flex items-center justify-center z-10">
-                      {item.done ? (
+                      {item.updating ? (
+                        <RefreshCw className="w-[15px] h-[15px] text-[#92400e] animate-spin" style={{ animationDuration: "2s" }} />
+                      ) : item.done ? (
                         <CheckCircle2 className="w-[17px] h-[17px] text-[#1a6042]" />
                       ) : (
                         <Circle className="w-[17px] h-[17px] text-[rgba(55,50,47,0.20)]" />
                       )}
                     </div>
-                    <span className={cn("text-[12px] font-medium", item.done ? "text-[#37322F]" : "text-[#c4bfbb]")}>
+                    <span className={cn(
+                      "text-[12px] font-medium",
+                      item.done || item.updating ? "text-[#37322F]" : "text-[#c4bfbb]"
+                    )}>
                       {item.label}
                     </span>
                   </div>
@@ -462,37 +548,32 @@ function DrawPageInner() {
             <div className="min-h-0 flex flex-col bg-[#FDFAF6] border border-[rgba(55,50,47,0.10)] rounded-2xl overflow-hidden shadow-[0_2px_16px_rgba(55,50,47,0.06)]">
               <button
                 onClick={() => setDrawerOpen(!drawerOpen)}
-                disabled={phase !== "drawn"}
+                disabled={phase !== "repaid"}
                 className="flex-shrink-0 w-full px-4 py-3 flex items-center justify-between hover:bg-[rgba(55,50,47,0.02)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <span className="text-[10px] font-medium text-[#a8a29e] tracking-[0.12em] uppercase">
                   Verification details
                 </span>
-                {drawerOpen && phase === "drawn"
+                {drawerOpen && phase === "repaid"
                   ? <ChevronUp className="w-3 h-3 text-[#a8a29e]" />
                   : <ChevronDown className="w-3 h-3 text-[#a8a29e]" />
                 }
               </button>
-              {drawerOpen && phase === "drawn" && (
+              {drawerOpen && phase === "repaid" && (
                 <div className="min-h-0 border-t border-[rgba(55,50,47,0.08)] px-4 py-2 flex flex-col overflow-y-auto scrollbar-hide">
                   <DrawerRow
-                    label="CreditOpened tx hash"
-                    value={shortAddr(flowState?.open?.txHash)}
-                    {...(flowState?.open?.txHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.open.txHash) } : {})}
+                    label="Repaid tx hash"
+                    value={shortAddr(flowState?.repay?.txHash)}
+                    {...(flowState?.repay?.txHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.repay.txHash) } : {})}
                   />
+                  <DrawerRow label="Repayment commitment" value={shortAddr(flowState?.repay?.repaymentCommitment)} />
                   <DrawerRow
-                    label="DrawExecuted tx hash"
-                    value={shortAddr(flowState?.draw?.txHash)}
-                    {...(flowState?.draw?.txHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.draw.txHash) } : {})}
+                    label="Repayment cUSDC tx"
+                    value={shortAddr(flowState?.repay?.confidentialTransferTxHash)}
+                    {...(flowState?.repay?.confidentialTransferTxHash ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.repay.confidentialTransferTxHash) } : {})}
                   />
-                  <DrawerRow
-                    label="OZ confidential transfer tx"
-                    value={hasRealConfidentialTransfer ? shortAddr(flowState?.draw?.confidentialTransferTxHash) : "Not submitted"}
-                    {...(hasRealConfidentialTransfer && flowState?.draw?.confidentialTransferTxHash
-                      ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "tx", flowState.draw.confidentialTransferTxHash) }
-                      : {})}
-                  />
-                  <DrawerRow label="Transfer commitment" value={shortAddr(flowState?.draw?.transferCommitment)} />
+                  <DrawerRow label="Closed ledger" value={flowState?.repay?.ledger ? String(flowState.repay.ledger) : latestLedger ? String(latestLedger) : "Pending sync"} />
+                  <DrawerRow label="Collateral lock release" value="Released" />
                   <DrawerRow label="Position ID" value={shortAddr(flowState?.positionId)} />
                   <DrawerRow
                     label="Credit line contract"
@@ -500,11 +581,10 @@ function DrawPageInner() {
                     {...(creditLineAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", creditLineAddr) } : {})}
                   />
                   <DrawerRow
-                    label="cUSDC contract"
-                    value={shortAddr(cusdcAddr)}
-                    {...(cusdcAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", cusdcAddr) } : {})}
+                    label="History registry contract"
+                    value={shortAddr(repaymentHistoryAddr)}
+                    {...(repaymentHistoryAddr ? { href: explorerUrl(demo?.snapshot?.network?.networkPassphrase, "contract", repaymentHistoryAddr) } : {})}
                   />
-                  <DrawerRow label="Closed / latest ledger" value={flowState?.draw?.ledger ? String(flowState.draw.ledger) : latestLedger ? String(latestLedger) : "Pending sync"} />
                 </div>
               )}
             </div>
@@ -516,10 +596,10 @@ function DrawPageInner() {
   )
 }
 
-export default function DrawPage() {
+export default function RepayPage() {
   return (
     <Suspense fallback={null}>
-      <DrawPageInner />
+      <RepayPageInner />
     </Suspense>
   )
 }

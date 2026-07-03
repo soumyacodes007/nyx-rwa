@@ -112,7 +112,7 @@ services:
       ANCHOR_STELLAR_TOML_URL: http://anchor-platform:8080/.well-known/stellar.toml
     command: ["npm", "run", "start:api"]
     volumes:
-      - ./data:/app/data
+      - ${APP_DATA_HOST_DIR:-./data}:/app/data
     ports:
       - "${API_PORT}:3001"
     depends_on:
@@ -126,7 +126,7 @@ services:
       - ./.env
     command: ["npm", "run", "start:worker"]
     volumes:
-      - ./data:/app/data
+      - ${APP_DATA_HOST_DIR:-./data}:/app/data
     depends_on:
       - api
 

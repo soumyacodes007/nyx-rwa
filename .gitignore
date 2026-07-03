@@ -10,6 +10,7 @@ coverage/
 .cache/
 
 data/
+data_backup*/
 *.sqlite
 *.sqlite-*
 
