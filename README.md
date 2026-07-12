@@ -424,28 +424,88 @@ docker compose up -d --force-recreate --no-deps api prover-worker
 
 ## Testing
 
-Contract and circuit testing is documented here:
+Nyx's core correctness lives in contracts and circuits. The dashboard/backend operate the demo, but the trust layer is tested through Rust/Soroban and Noir.
 
-[docs/contract-circuit-testing-guide.md](docs/contract-circuit-testing-guide.md)
+### Contract Tests
 
-Quick validation:
+Run all Soroban contract tests:
 
 ```bash
 cd oz-confidential
 cargo test --workspace
+```
 
-cd circuits
+The latest local run passed. The main tested contract is `PrefundingCreditLine`, covering:
+
+```txt
+open_draw_repay_happy_path
+open_credit_rejects_failing_proof
+paused_blocks_open_credit
+reusing_active_lock_key_fails
+execute_draw_rejects_mismatched_commitment
+execute_draw_reverts_if_transfer_fails
+repay_reverts_if_transfer_fails_and_keeps_collateral_frozen
+liquidate_before_due_ledger_fails
+liquidate_after_due_ledger_seizes_and_blocks_repay
+```
+
+What these tests prove:
+
+- Credit can open only after policy, proof, tenor, oracle, participant, and lock checks.
+- Bad proof and reused collateral lock fail.
+- Draw records only when the confidential transfer path succeeds.
+- Repayment releases the lock.
+- Liquidation cannot happen before due ledger and blocks repayment after liquidation.
+
+### Circuit Tests
+
+Run all Noir circuit tests:
+
+```bash
+cd oz-confidential/circuits
 nargo test --workspace
 nargo compile --workspace
 ```
 
-Latest local validation:
+The latest local run passed **159 substantive Noir tests**:
 
 ```txt
-cargo test --workspace: passed
-nargo test --workspace: passed
-nargo compile --workspace: passed
+collateral_sufficiency: 3
+repayment_history: 3
+register: 7
+transfer: 28
+set_spender: 26
+spender_transfer: 30
+revoke_spender: 24
+withdraw: 19
+shared confidential lib: 19
 ```
+
+What these tests prove:
+
+- Collateral sufficiency accepts valid private collateral and rejects insufficient or wrong-owner witnesses.
+- Repayment history accepts threshold-met histories and rejects forged roots or failed thresholds.
+- Confidential token circuits enforce register, transfer, spender allowance, revoke, and withdraw logic.
+- Shared primitives cover Pedersen commitments, Poseidon-domain hashing, ECDH, encryption/decryption, and fixture consistency.
+
+### Verification Key Checks
+
+Verifier keys live in:
+
+```txt
+oz-confidential/circuits/vks/
+```
+
+When a circuit changes intentionally, regenerate and review verifier artifacts:
+
+```bash
+cd oz-confidential/circuits
+./scripts/extract_vks.sh
+./scripts/build_vk_bins.sh
+git diff -- oz-confidential/circuits/vks
+```
+
+Detailed guide: [docs/contract-circuit-testing-guide.md](docs/contract-circuit-testing-guide.md)
 
 ## API Surface
 
